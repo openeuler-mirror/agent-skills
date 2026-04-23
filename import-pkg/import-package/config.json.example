@@ -1,0 +1,6 @@
+{
+  "gitcode": {
+    "base_url": "https://gitcode.com/api/v5",
+    "token": "your_gitcode_token_here"
+  }
+}
