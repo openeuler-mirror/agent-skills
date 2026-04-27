@@ -1,0 +1,11 @@
+{
+  "github": {
+    "token": "your_github_token_here",
+    "username": "your_github_username"
+  },
+  "repo": {
+    "remote_url": "https://github.com/your_username/your_rpm_repo.git",
+    "branch": "main",
+    "local_dir": "/path/to/local/rpm-repo"
+  }
+}
