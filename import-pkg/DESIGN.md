@@ -15,13 +15,14 @@
 3. [import-package：PR 解析与调度](#3-import-package-pr-解析与调度)
 4. [pkg-introduce：单包引入流程](#4-pkg-introduce-单包引入流程)
 5. [build-rpm：RPM 构建与依赖递归](#5-build-rpm-rpm-构建与依赖递归)
-6. [archive-rpm-sources：归档与发布](#6-archive-rpm-sources-归档与发布)
+6. [review-rpm：质量审查与报告](#6-review-rpm-质量审查与报告)
+7. [archive-rpm-sources：归档与发布](#7-archive-rpm-sources-归档与发布)
 
 **第三部分：规范参考**
 
-7. [各语言 Spec 模板](#7-各语言-spec-模板)
-8. [License 分类处理规则](#8-license-分类处理规则)
-9. [特殊场景处理指南](#9-特殊场景处理指南)
+8. [各语言 Spec 模板](#8-各语言-spec-模板)
+9. [License 分类处理规则](#9-license-分类处理规则)
+10. [特殊场景处理指南](#10-特殊场景处理指南)
 
 **附录：架构决策记录**
 
@@ -70,7 +71,8 @@ openEuler 社区通过 PR 流程引入生态包：开发者向 community 仓库�
 | **容器隔离** | 每次顶层引入必须重建容器，依赖包复用同一容器；权威查询与真实构建都在容器内完成 |
 | **状态文件防护** | `building.txt` 检测循环依赖，`introduced.txt` 只记录实际 `built_new / upgraded_user_repo` 的依赖 |
 | **合规前置** | 上游仓库合规和 License 检查在下载源码后立即执行，不合规立即阻断 |
-| **规范先修复再阻断** | `rpmlint W` 不阻断；`rpmlint E` 先尝试修 spec 并重跑，只有同类问题连续无法解决时才最终阻断 |
+| **源码版本锁定** | 无 `--version` 时，下载后自动检测 manifest 版本并切换到对应不可变 tag，保证构建可复现 |
+| **CRITIC+SCALAR 质量循环** | rpmbuild 成功后进入 review-fix 循环（最多 3 轮）：Critic（review-rpm critique）以工具输出为锚点发现 E 级问题，Actor（build-rpm）按结构化修复指令修 spec 重构；循环外 Judge（review-rpm feedback/summary）提炼经验并生成最终报告 |
 | **归档原子性** | 主包构建完成后统一归档主包和本次实际新引入依赖，不归档纯复用依赖 |
 
 ---
@@ -83,12 +85,11 @@ openEuler 社区通过 PR 流程引入生态包：开发者向 community 仓库�
 |------|------|------|
 | **import-package** skill | 总入口 | 解析 PR 链接，提取 upstream URL，调度 `pkg-introduce` |
 | **pkg-introduce** skill | 引入协调 | 合规检查、源码下载、语言/版本识别、容器准备、权威 existing-check、构建调度、顶层归档 |
-| **build-rpm** skill | 构建核心 | spec 生成、`rpmlint` 校验、依赖预检、依赖递归引入、`rpmbuild` 循环、运行时依赖验证 |
+| **build-rpm** skill | 构建核心 | spec 生成、`rpmlint` 校验、依赖预检、依赖递归引入、`rpmbuild` 循环、review-fix 质量循环、运行时依赖验证 |
+| **review-rpm** skill | 质量审查 | Critic（loop 内）：以 rpmbuild/rpmlint 工具输出为锚点，输出结构化修复指令；Judge（loop 外）：提炼 lessons、生成引入报告 |
 | **archive-rpm-sources** skill | 归档发布 | 将 spec + tarball + RPM 推送到 GitHub，维护 yum 软件源 |
 | **setup-build-env** skill | 环境部署 | 创建 openEuler 容器，安装语言工具链 |
 | **resolve-rpm-conflicts** skill | 冲突处理 | 安装 RPM 时遇到冲突，自动解决后重试 |
-| **oe-build-env 容器** | 编译环境 | 隔离的 openEuler 系统，执行权威 repo 查询、`dnf builddep`、`rpmbuild` 与依赖安装 |
-| **GitHub RPM repo** | 存储 | 存放所有归档的 spec、tarball、RPM 及 repodata |
 
 ### 2.2 调用链结构
 
@@ -96,7 +97,7 @@ openEuler 社区通过 PR 流程引入生态包：开发者向 community 仓库�
 import-package
   └─ pkg-introduce <main> <url>                     # 顶层，depth=0
        ├─ check_repo.py                              # 上游合规检查
-       ├─ download_source.py                         # 源码下载
+       ├─ download_source.py                         # 源码下载（自动切换到版本对应 tag）
        ├─ check_license.py                           # License 检查
        ├─ extract_version.py / 语言识别              # 语言与版本确定
        ├─ setup-build-env                            # 顶层重建容器
@@ -110,20 +111,28 @@ import-package
             │                   └─ ...（最深 depth=5）
             ├─ rpmbuild 循环（最多 10 轮）
             │    └─ 发现缺包 / 包名不匹配 / 文件列表问题 → 修 spec 或递归引入
+            ├─ review-fix 质量循环（最多 3 轮）      # rpmbuild 成功后触发
+            │    ├─ review-rpm critique              # Critic：工具输出 → 结构化修复指令
+            │    ├─ 按 fix_instruction 修 spec       # Actor：执行修复
+            │    └─ 重跑 rpmbuild（仅修复轮）
             └─ 运行时依赖验证 / 依赖包安装
-       └─ archive-rpm-sources --pkgs <main> <dep-A> <dep-B> ...
+       ├─ archive-rpm-sources --pkgs <main> <dep-A> <dep-B> ...
+       ├─ review-rpm feedback                        # Judge：提炼 lessons
+       └─ review-rpm summary                         # Judge：生成引入报告
 ```
 
 ### 2.3 状态文件
 
-整个引入会话使用两个状态文件，位于 `./build_state/`：
+整个引入会话使用以下状态文件，位于 `./build_state/` 和 `./reports/`：
 
 | 文件 | 内容 | 作用 |
 |------|------|------|
-| `building.txt` | 当前调用链上正在处理的包名（每行一个） | 循环依赖检测 |
-| `introduced.txt` | 本次会话实际 `built_new / upgraded_user_repo` 成功的依赖包名 | 去重 + 顶层归档时确定归档列表 |
+| `build_state/building.txt` | 当前调用链上正在处理的包名（每行一个） | 循环依赖检测 |
+| `build_state/introduced.txt` | 本次会话实际 `built_new / upgraded_user_repo` 成功的依赖包名 | 去重 + 顶层归档时确定归档列表 |
+| `reports/critique_round<N>_<pkgname>.json` | review-fix 循环每轮 Critic 输出的结构化 verdict | orchestrator 读取 verdict / fix_instruction 决定下一步 |
+| `reports/round_history_<pkgname>.json` | 所有轮次 critique JSON 汇总 + exit_reason | Judge（feedback/summary）读取，生成修复过程摘要 |
 
-顶层 `pkg-introduce` 在第一步初始化这两个文件（清空）；依赖包调用复用已有文件。
+顶层 `pkg-introduce` 在第一步初始化 `building.txt` 和 `introduced.txt`（清空）；依赖包调用复用已有文件。
 
 ### 2.4 整体流程概览
 
@@ -141,7 +150,8 @@ PR 链接输入
 │ pkg-introduce（主包，无 --install）            │
 │  ① 状态文件初始化                             │
 │  ② 上游仓库合规检查                           │  ← 阻断线 1
-│  ③ download_source.py 下载源码                │
+│  ③ download_source.py 下载源码               │
+│     （自动切换到版本对应不可变 tag）           │
 │  ④ License 合规检查                           │  ← 阻断线 2
 │  ⑤ 语言检测 + 版本号提取                      │
 │  ⑥ 重建编译容器（setup-build-env）            │
@@ -154,15 +164,22 @@ PR 链接输入
 ┌──────────────────────────────────────────────┐
 │ build-rpm（depth=0）                          │
 │  ① 读取构建说明（BUILD.md / README.md）        │
-│  ② 生成 spec 文件                             │
-│  ③ rpmlint 规范校验（先修复，再决定阻断）      │
+│  ② 生成 spec 文件（注入 lessons 历史经验）     │
+│  ③ rpmlint 规范校验                           │
 │  ④ pre_check_deps.py 预检并递归引入缺失包      │
 │  ⑤ rpmbuild 循环（最多 10 轮）                │  ← 阻断线 3
 │     - dnf builddep 失败 → 修正包名或递归引入  │
 │     - %build 失败 → 补 BuildRequires 或引入   │
 │     - %files/pyproject 问题 → 调整 spec       │
 │  ⑥ 运行时依赖验证                             │
-│  ⑦ 依赖包模式下安装 RPM                       │
+│  ⑦ review-fix 质量循环（最多 3 轮）           │
+│     - review-rpm critique（Critic）           │
+│       Oracle: rpmbuild log + rpmlint          │
+│       输出: structured_verdict.json           │
+│     - PASS → 退出循环进归档                   │
+│     - FIX_REQUIRED → 修 spec 重跑 rpmbuild    │
+│     - ABORT → 短路失败，进入报告              │
+│  ⑧ 依赖包模式下安装 RPM                       │
 └────────────────────┬─────────────────────────┘
                      │
                      ▼
@@ -170,6 +187,13 @@ PR 链接输入
 │ archive-rpm-sources                           │
 │  归档 spec + tarball + RPM → GitHub           │
 │  createrepo_c 重建 yum 索引                   │
+└────────────────────┬─────────────────────────┘
+                     │
+                     ▼
+┌──────────────────────────────────────────────┐
+│ review-rpm（Judge 角色）                      │
+│  feedback：分析过程 + 提炼 lessons            │
+│  summary：生成含修复过程摘要的引入报告        │
 └────────────────────┬─────────────────────────┘
                      │
                      ▼
@@ -297,7 +321,7 @@ python3.11 ${SCRIPT_DIR}/check_license.py ./sources/<pkgname> \
   --pkg <pkgname> -o reports/license_check_<pkgname>.json
 ```
 
-详见 [第 8 节 License 分类处理规则](#8-license-分类处理规则)。
+详见 [第 9 节 License 分类处理规则](#9-license-分类处理规则)。
 
 ### 第五步：检测语言类型并确定版本号
 
@@ -380,8 +404,9 @@ ALL_PKGS="<pkgname> ${INTRODUCED}"
 ### 保护常量
 
 ```
-MAX_DEPTH  = 5    # 最大递归深度
-MAX_ROUNDS = 10   # 单包最大编译轮次
+MAX_DEPTH        = 5    # 最大递归深度
+MAX_ROUNDS       = 10   # 单包最大编译轮次
+MAX_REVIEW_ROUNDS = 3   # review-fix 质量循环最大轮次
 ```
 
 ### 第一步：读取构建说明
@@ -397,7 +422,7 @@ date "+%a %b %d %Y"   # 获取 %changelog 日期
 
 ### 第二步：生成 spec 文件
 
-根据 `<lang>` 选择模板，在宿主机 `/tmp/<pkgname>.spec` 生成。各语言模板见 [第 7 节](#7-各语言-spec-模板)。
+根据 `<lang>` 选择模板，在宿主机 `/tmp/<pkgname>.spec` 生成。各语言模板见 [第 8 节](#8-各语言-spec-模板)。
 
 ### 第二步（补充）：rpmlint 规范校验
 
@@ -554,7 +579,81 @@ docker exec oe-build-env bash -c \
 
 ---
 
-## 6. archive-rpm-sources：归档与发布
+## 6. review-rpm：质量审查与报告
+
+review-rpm 实现了 **CRITIC + SCALAR 融合模式**，分为两个完全不同的角色：
+
+### 6.1 Critic 角色（loop 内，critique stage）
+
+由 build-rpm 的 review-fix 循环在每轮 `rpmbuild` 成功后调用。
+
+**核心约束：每条 issue 必须有 oracle_evidence**（引用 rpmbuild log 或 rpmlint 的原始输出），不得凭空发表意见。
+
+输出 `./reports/critique_round<N>_<pkgname>.json`：
+
+```json
+{
+  "verdict": "FIX_REQUIRED",
+  "continue_loop": true,
+  "spec_hash": "sha256:7f68dda1...",
+  "e_count": 1,
+  "issues": [
+    {
+      "severity": "E",
+      "category": "reproducibility",
+      "location": "%build section",
+      "oracle_evidence": "cargo build --release --locked --ignore-rust-version",
+      "description": "--ignore-rust-version 绕过了上游 MSRV 声明，破坏跨环境可复现性",
+      "fix_instruction": "删除 --ignore-rust-version；当前容器 rustc 满足 Cargo.toml 的 rust-version 要求"
+    }
+  ]
+}
+```
+
+**verdict 语义：**
+
+| verdict | 含义 | orchestrator 动作 |
+|---------|------|-----------------|
+| `PASS` | 零 E 级问题 | 退出循环，进归档 |
+| `FIX_REQUIRED` | 有 E 级问题 | 按 fix_instruction 修 spec，重跑 rpmbuild |
+| `ABORT` | 结构性问题，修 spec 无法解决 | 短路失败，跳归档，进 Judge |
+
+**振荡检测：** orchestrator 记录每轮 `spec_hash`；连续两轮 hash 相同则强制退出，避免死循环。
+
+**E 级问题类型：**
+
+| 类别 | 典型触发 |
+|------|---------|
+| `reproducibility` | `--ignore-rust-version` / `--force` / `--no-verify` 等绕过 flag；Source0 指向 branch 而非 tag；缺少 `--locked` |
+| `lint_error` | rpmlint `E:` 前缀错误行 |
+| `build_failure` | rpmbuild 非零退出（防御性保留） |
+
+### 6.2 Judge 角色（loop 外，feedback + summary stage）
+
+由 pkg-introduce 在归档完成后调用，与 loop 完全解耦。
+
+**feedback stage：**
+- 读取最终 spec、rpmlint、build log、round_history
+- 分析构建过程质量（包括 review-fix 循环是否合理）
+- 提炼本次发现的新经验写入 `build-rpm/lessons/<lang>.json`（按语言分文件，保留最近 30 条）
+- 输出 `./reports/feedback_<pkgname>.json`
+
+**summary stage：**
+- 读取所有流程 JSON + round_history
+- 生成 `./reports/<pkgname>_introduction_report.md`
+- 报告含"修复过程摘要"章节（有 round_history 时），逐轮列出修复内容、Oracle 依据和结果
+
+### 6.3 lessons 机制
+
+lessons 文件是跨会话的经验记忆，路径 `build-rpm/lessons/<lang>.json`。
+
+- **写入时机：** feedback stage（Judge）在 loop 结束后写，不在 loop 内写
+- **注入时机：** build-rpm 在 spec 生成前读取，筛选 `applies_to` 相关条目注入推理上下文
+- **效果：** 本次发现的问题（如"不得出现 --ignore-rust-version"）在下次同语言包引入时提前规避
+
+---
+
+## 7. archive-rpm-sources：归档与发布
 
 ### 触发方式
 
@@ -623,7 +722,7 @@ python3 ${CLAUDE_SKILL_DIR}/scripts/publish_rpm.py \
 
 # 第三部分：规范参考
 
-## 7. 各语言 Spec 模板
+## 8. 各语言 Spec 模板
 
 ### 7.1 Go 包
 
@@ -771,7 +870,7 @@ Development headers and libraries for %{name}.
 
 **关键注意：** C 库须同时生成主包（`.so.*`）和 devel 包（`.h` + `.so` 软链接 + `.pc`）
 
-### 7.4 Rust 包
+### 8.4 Rust 包
 
 ```spec
 Name:           <pkgname>
@@ -780,9 +879,11 @@ Release:        1%{?dist}
 Summary:        <描述>
 License:        <SPDX_ID>
 URL:            <upstream_url>
-Source0:        %{name}-%{version}.tar.gz
+Source0:        https://github.com/<author>/%{name}/archive/refs/tags/v%{version}/%{name}-%{version}.tar.gz
 
-BuildRequires:  rust cargo
+%global debug_package %{nil}
+
+BuildRequires:  rust cargo gcc
 
 %description
 <描述>
@@ -791,10 +892,15 @@ BuildRequires:  rust cargo
 %autosetup
 
 %build
-cargo build --release
+export CARGO_HOME=$(pwd)/.cargo-home
+mkdir -p "${CARGO_HOME}"
+cargo build --release --locked
 
 %install
 install -Dpm 0755 target/release/%{name} %{buildroot}%{_bindir}/%{name}
+
+%check
+# offline build; test fixtures not vendored
 
 %files
 %license LICENSE
@@ -806,6 +912,15 @@ install -Dpm 0755 target/release/%{name} %{buildroot}%{_bindir}/%{name}
 - Initial package
 ```
 
+**关键注意：**
+- `Source0` 必须使用完整 URL 指向不可变 tag，不得只写文件名（rpmlint `invalid-url` 检查）
+- `cargo build` 必须加 `--locked`，锁定 `Cargo.lock` 中的依赖版本
+- **禁止** 使用 `--ignore-rust-version`；若容器 rustc 版本不满足 `Cargo.toml` 声明的 `rust-version`，需升级编译器，而非绕过约束
+- `CARGO_HOME` 显式设定，避免依赖宿主机隐式路径
+- `%global debug_package %{nil}` 避免 debuginfo 子包 `%files` 为空导致构建失败
+- 必须有 `%check` section（即使为空注释），否则 rpmlint 报 `no-%check-section`
+- `Packager:` 和 `Group:` 字段不写（分别触发 `hardcoded-packager-tag` 和冗余字段警告）
+
 ### 7.5 通用注意事项
 
 - `%changelog` 日期用 `date "+%a %b %d %Y"` 获取，星期须与实际日期匹配
@@ -814,7 +929,7 @@ install -Dpm 0755 target/release/%{name} %{buildroot}%{_bindir}/%{name}
 
 ---
 
-## 8. License 分类处理规则
+## 9. License 分类处理规则
 
 `check_license.py` 输出 `category` 和 `blocking` 字段：
 
@@ -831,7 +946,7 @@ install -Dpm 0755 target/release/%{name} %{buildroot}%{_bindir}/%{name}
 
 ---
 
-## 9. 特殊场景处理指南
+## 10. 特殊场景处理指南
 
 ### 9.1 依赖链深度爆炸
 
@@ -906,4 +1021,4 @@ install -Dpm 0755 target/release/%{name} %{buildroot}%{_bindir}/%{name}
 
 ---
 
-*文档版本：v3.0 | 2026-04-10*
+*文档版本：v4.0 | 2026-05-21*

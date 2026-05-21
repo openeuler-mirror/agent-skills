@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-启动 OpenEuler aarch64 构建容器
+启动 OpenEuler 25.09 rc8 构建容器
 
 功能：
   1. 每次调用强制删除旧容器并重新创建（保证环境干净）
@@ -19,41 +19,53 @@ import subprocess
 import sys
 from pathlib import Path
 
-DEFAULT_IMAGE = "openeuler-mainline:latest"
+DEFAULT_IMAGE = "openeuler-25.09:latest"
 DEFAULT_NAME  = "oe-build-env"
 CONTAINER_SOURCE_DIR = "/build/source"
 
-# Mainline 镜像是 openEuler 25.09，用官方源 + dailybuild update 叠加
-# 官方源提供完整基础包，dailybuild update 提供最新增量包
+# 25.09 rc8 镜像使用同一构建目录下的完整仓作为主仓，保证镜像与软件仓同源
+BUILD_ROOT = (
+    "http://121.36.84.172/dailybuild/"
+    "EBS-openEuler-25.09/rc8_openeuler-2025-09-29-16-20-12"
+)
 REPO_TEMPLATE = """\
 [OS]
-name=openEuler-{ver}-OS
-baseurl=https://repo.openeuler.org/openEuler-{ver}/OS/$basearch/
+name=openEuler-25.09-rc8-OS
+baseurl={build_root}/OS/$basearch/
 enabled=1
 gpgcheck=0
 
 [everything]
-name=openEuler-{ver}-everything
-baseurl=https://repo.openeuler.org/openEuler-{ver}/everything/$basearch/
+name=openEuler-25.09-rc8-everything
+baseurl={build_root}/everything/$basearch/
+enabled=1
+gpgcheck=0
+
+[update]
+name=openEuler-25.09-rc8-update
+baseurl={build_root}/update/$basearch/
 enabled=1
 gpgcheck=0
 
 [EPOL]
-name=openEuler-{ver}-EPOL
-baseurl=https://repo.openeuler.org/openEuler-{ver}/EPOL/main/$basearch/
+name=openEuler-25.09-rc8-EPOL
+baseurl={build_root}/EPOL/main/$basearch/
 enabled=1
 gpgcheck=0
-{update_section}"""
 
-# dailybuild URL 宿主机缓存文件及其有效期（秒）
-_DAILYBUILD_CACHE_FILE = "/tmp/oe_dailybuild_url.cache"
-_DAILYBUILD_CACHE_TTL  = 3600   # 1 小时
+[EPOL-update]
+name=openEuler-25.09-rc8-EPOL-update
+baseurl={build_root}/EPOL/update/main/$basearch/
+enabled=1
+gpgcheck=0
+"""
 
 # 容器内基础工具（所有语言都需要）
 BASE_PACKAGES = [
     "gcc", "gcc-c++", "make", "rpm-build", "dnf-plugins-core",
     "git", "wget", "tar", "which", "findutils",
 ]
+
 
 # 各语言专项工具链
 LANG_PACKAGES = {
@@ -73,62 +85,12 @@ def container_exists(name: str) -> bool:
     return result.returncode == 0
 
 
-def _get_latest_dailybuild() -> str:
-    """获取最新 dailybuild 目录名，优先读宿主机缓存（1 小时 TTL）。"""
-    import time, os
-    cache = _DAILYBUILD_CACHE_FILE
-    if os.path.exists(cache):
-        age = time.time() - os.path.getmtime(cache)
-        if age < _DAILYBUILD_CACHE_TTL:
-            cached = open(cache).read().strip()
-            if cached:
-                print(f"[INFO] dailybuild cache hit: {cached} (age {int(age)}s)")
-                return cached
-
-    # 缓存失效或不存在，重新请求
-    r = subprocess.run(
-        ["curl", "-s", "--max-time", "10",
-         "http://121.36.84.172/dailybuild/EBS-openEuler-Mainline/"],
-        capture_output=True, text=True
-    )
-    import re
-    matches = re.findall(r'openeuler-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}', r.stdout)
-    latest = sorted(matches)[-1] if matches else ""
-    if latest:
-        try:
-            open(cache, "w").write(latest)
-        except OSError:
-            pass
-        print(f"[INFO] dailybuild fetched: {latest}")
-    else:
-        print("[WARN] 无法获取 dailybuild 目录，跳过 update 源", file=sys.stderr)
-    return latest
-
-
 def fix_repo(name: str) -> bool:
-    """替换容器内错误的 repo，使用官方源 + dailybuild update"""
+    """替换容器内 repo，统一使用固定 25.09 rc8 构建目录仓"""
     print("[INFO] 修复 repo 配置...")
 
-    # 读取容器内系统版本
-    r = subprocess.run(
-        ["docker", "exec", name, "bash", "-c",
-         "grep VERSION_ID /etc/os-release | cut -d= -f2 | tr -d '\"'"],
-        capture_output=True, text=True
-    )
-    ver = r.stdout.strip() or "25.09"
-    print(f"[INFO] 容器系统版本: openEuler {ver}")
-
-    # 从宿主机获取最新 dailybuild 目录（带缓存，避免每次请求服务器）
-    latest_build = _get_latest_dailybuild()
-    update_section = ""
-    if latest_build:
-        update_url = (f"http://121.36.84.172/dailybuild/EBS-openEuler-Mainline"
-                      f"/{latest_build}/update/$basearch/")
-        update_section = (f"\n[dailybuild-update]\nname=openEuler-Mainline-dailybuild-update\n"
-                          f"baseurl={update_url}\nenabled=1\ngpgcheck=0\n")
-        print(f"[INFO] dailybuild update: {latest_build}")
-
-    repo = REPO_TEMPLATE.format(ver=ver, update_section=update_section)
+    repo = REPO_TEMPLATE.format(build_root=BUILD_ROOT)
+    print(f"[INFO] build root: {BUILD_ROOT}")
 
     # 通过 docker cp 写入，避免 shell 转义问题
     import tempfile, os
@@ -138,7 +100,7 @@ def fix_repo(name: str) -> bool:
     subprocess.run(["docker", "cp", tmp, f"{name}:/etc/yum.repos.d/openEuler.repo"], check=True)
     os.unlink(tmp)
 
-    rc = exec_in_container(name, "dnf clean all -q", workdir="/")
+    rc = exec_in_container(name, "rm -f /etc/yum.repos.d/*.repo~ && dnf clean all -q", workdir="/")
     if rc != 0:
         print("[ERROR] dnf clean 失败", file=sys.stderr)
         return False
@@ -175,7 +137,9 @@ def start_container(source_dir: str, name: str, image: str) -> bool:
         return False
 
     print(f"[INFO] 容器已启动: {r.stdout.strip()[:12]}")
-    fix_repo(name)
+    if not fix_repo(name):
+        print("[ERROR] repo 修复失败，停止继续初始化", file=sys.stderr)
+        return False
     return True
 
 
@@ -234,7 +198,7 @@ def stop_container(name: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="启动 OpenEuler aarch64 构建容器")
+    parser = argparse.ArgumentParser(description="启动 OpenEuler 25.09 rc8 构建容器")
     parser.add_argument("--source-dir", default="", help="源码目录（挂载到容器内）")
     parser.add_argument("--name", default=DEFAULT_NAME, help=f"容器名（默认 {DEFAULT_NAME}）")
     parser.add_argument("--image", default=DEFAULT_IMAGE, help=f"镜像名（默认 {DEFAULT_IMAGE}）")

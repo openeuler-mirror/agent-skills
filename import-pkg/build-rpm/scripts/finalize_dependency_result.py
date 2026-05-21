@@ -9,10 +9,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from dependency_resolution_state import clear_building, mark_introduced
+
 SUCCESS_ACTIONS = {"built_new", "upgraded_user_repo", "reused_official", "reused_user_repo"}
 INTRODUCED_ACTIONS = {"built_new", "upgraded_user_repo"}
 REUSED_ACTIONS = {"reused_official", "reused_user_repo"}
 BLOCKED_ACTIONS = {"blocked"}
+RETRYABLE_FAILURE_TYPES = {"retryable_version_conflict", "retryable_dependency_resolution_failure"}
 
 
 def result_path(pkgname: str, reports_dir: str) -> Path:
@@ -23,30 +26,17 @@ def read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def remove_exact_line(path: Path, line: str) -> None:
-    if not path.exists():
-        return
-    lines = path.read_text(encoding="utf-8").splitlines()
-    kept = [item for item in lines if item.strip() != line]
-    path.write_text(("\n".join(kept) + "\n") if kept else "", encoding="utf-8")
-
-
-def append_unique_line(path: Path, line: str) -> None:
-    existing = set()
-    if path.exists():
-        existing = {item.strip() for item in path.read_text(encoding="utf-8").splitlines() if item.strip()}
-    if line in existing:
-        return
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(f"{line}\n")
-
-
-def summarize(dep_pkgname: str, action: str, reason: str, introduced: bool, result_file: Path) -> dict[str, Any]:
+def summarize(dep_pkgname: str, action: str, reason: str, introduced: bool, result_file: Path, data: dict[str, Any]) -> dict[str, Any]:
     return {
         "dep_pkgname": dep_pkgname,
         "action": action,
         "reason": reason,
         "introduced": introduced,
+        "requested_version": data.get("requested_version", ""),
+        "version": data.get("version", ""),
+        "failure_type": data.get("failure_type", ""),
+        "failure_reason": data.get("failure_reason", ""),
+        "retryable": data.get("failure_type", "") in RETRYABLE_FAILURE_TYPES,
         "result_file": str(result_file),
     }
 
@@ -62,15 +52,13 @@ def main() -> int:
 
     build_state_dir = Path(args.build_state_dir)
     reports_dir = Path(args.reports_dir)
-    building_file = build_state_dir / "building.txt"
-    introduced_file = build_state_dir / "introduced.txt"
     result_file = result_path(args.dep_pkgname, str(reports_dir))
 
     if not result_file.exists():
         # 即使结果文件缺失，也要清理 building.txt，防止残留阻塞后续构建
         if not args.keep_building:
             build_state_dir.mkdir(parents=True, exist_ok=True)
-            remove_exact_line(building_file, args.dep_pkgname)
+            clear_building(str(build_state_dir), args.dep_pkgname)
         print(f"结果文件不存在: {result_file}", file=sys.stderr)
         return 1
 
@@ -80,7 +68,7 @@ def main() -> int:
 
     if not args.keep_building:
         build_state_dir.mkdir(parents=True, exist_ok=True)
-        remove_exact_line(building_file, args.dep_pkgname)
+        clear_building(str(build_state_dir), args.dep_pkgname)
 
     if not action:
         # action 为空说明 pkg-introduce 异常退出，building.txt 已清理，直接报错
@@ -89,8 +77,8 @@ def main() -> int:
 
     if action in INTRODUCED_ACTIONS:
         build_state_dir.mkdir(parents=True, exist_ok=True)
-        append_unique_line(introduced_file, args.dep_pkgname)
-        payload = summarize(args.dep_pkgname, action, reason, True, result_file)
+        mark_introduced(str(build_state_dir), args.dep_pkgname)
+        payload = summarize(args.dep_pkgname, action, reason, True, result_file, data)
         if args.json_output:
             print(json.dumps(payload, ensure_ascii=False, indent=2))
         else:
@@ -98,7 +86,7 @@ def main() -> int:
         return 0
 
     if action in REUSED_ACTIONS:
-        payload = summarize(args.dep_pkgname, action, reason, False, result_file)
+        payload = summarize(args.dep_pkgname, action, reason, False, result_file, data)
         if args.json_output:
             print(json.dumps(payload, ensure_ascii=False, indent=2))
         else:
@@ -106,7 +94,7 @@ def main() -> int:
         return 0
 
     if action in BLOCKED_ACTIONS:
-        payload = summarize(args.dep_pkgname, action, reason, False, result_file)
+        payload = summarize(args.dep_pkgname, action, reason, False, result_file, data)
         if args.json_output:
             print(json.dumps(payload, ensure_ascii=False, indent=2))
         else:

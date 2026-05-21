@@ -1,7 +1,7 @@
 ---
 name: pkg-introduce
-description: OpenEuler 包引入统一入口：合规检查、源码下载、语言/版本检测、版本感知复用/升级决策、构建调度、归档。顶层包和依赖包走同一流程，通过 --install 区分。
-argument-hint: "<pkgname> <upstream_url> [--install] [--depth N]"
+description: OpenEuler 包引入统一入口：合规检查、源码下载、语言/版本检测、版本感知复用/升级决策、构建调度、归档。顶层包和依赖包走同一流程，通过 --mode 区分。构建完成后调用 /review-rpm 进行事后反馈，经验沉淀到 lessons 文件供下次参考。
+argument-hint: "<pkgname> <upstream_url> [--version <ver>] [--mode top-level|dependency] [--depth N]"
 allowed-tools:
   - Bash
   - Read
@@ -19,18 +19,19 @@ allowed-tools:
 |------|------|
 | `<pkgname>` | 包名 |
 | `<upstream_url>` | 上游地址 |
-| `--install` | 缺省：顶层包调用，构建完成后归档；存在：依赖包调用，构建完成后安装，不归档 |
+| `--version <ver>` | 可选。指定期望版本；下载阶段按该版本选择对应 git tag/branch，后续仍以真实源码提取版本做权威决策 |
+| `--mode top-level|dependency` | 调用模式；默认 `top-level`。显式传 `--mode dependency` 表示依赖包模式：构建完成后安装，不触发归档 |
 | `--depth N` | 当前递归深度，默认 0，由调用方传入，**不要手动指定** |
 
 > **调用链：**
 >
 > ```
 > import-package
->   └─ pkg-introduce <main> <url>                     # 顶层，depth=0
+>   └─ pkg-introduce <main> <url>                     # 顶层，mode=top-level，depth=0
 >        └─ build-rpm ... --depth 0
->             └─ 缺包 → pkg-introduce <dep-A> --install --depth 1
+>             └─ 缺包 → pkg-introduce <dep-A> --mode dependency --depth 1
 >                            └─ build-rpm ... --install --depth 1
->                                 └─ 缺包 → pkg-introduce <dep-B> --install --depth 2
+>                                 └─ 缺包 → pkg-introduce <dep-B> --mode dependency --depth 2
 >                                                └─ build-rpm ... --install --depth 2
 >                                                     └─ ...（最深 depth=5）
 > ```
@@ -43,29 +44,25 @@ allowed-tools:
 
 ### 总原则
 
-- **脚本默认在宿主机执行**：源码下载、文本/元数据解析、API 查询、JSON 汇总、流程编排均应在宿主机执行。
-- **仅将容器相关子步骤下沉到 `oe-build-env`**：凡是需要 OpenEuler 官方源真值或真实 RPM/构建环境的动作，必须通过 `docker exec oe-build-env ...` 在容器内执行。
-- **不要把整个流程整体搬进容器运行**：除非步骤本身就是容器内命令；否则应保持“宿主机跑脚本，容器跑查询/构建命令”的模式。
+- **默认在宿主机执行**：源码下载、文本/元数据解析、API 查询、JSON 汇总、流程编排均应在宿主机执行。
+- **仅将容器相关子步骤放到 `oe-build-env`**：凡是需要 OpenEuler 官方源真值或真实 RPM/构建环境的动作，必须通过 `docker exec oe-build-env ...` 在容器内执行。
+- **不要把整个流程整体搬进容器运行**：除非步骤本身就是容器内命令；否则应保持"宿主机跑脚本，容器跑查询/构建命令"的模式。
 
-### 本 skill 实际直接调用的脚本 / skill / 容器步骤
+### 本 skill 直接执行的命令 / skill / 容器步骤
 
-- `check_repo.py`：宿主机执行，用于上游仓库合规检查。
-- `download_source.py`：宿主机执行，用于下载上游源码。
-- `check_license.py`：宿主机执行，用于 License 合规检查。
-- `check_existing_package.py`：宿主机执行，但其中 `official` 判定必须查询 `oe-build-env` 容器内可见的 OpenEuler 官方 DNF 软件源；`user_repo` 仅扫描 AI 源本地克隆目录。
-- `pkg_introduce_result.py`：宿主机执行，用于结果写入与状态更新。
+- `check_repo.py`：用于上游仓库合规检查。
+- `download_source.py`：用于下载上游源码。
+- `check_license.py`：用于 License 合规检查。
+- `check_existing_package.py`：在宿主机执行，但其中 `official` 判定必须查询 `oe-build-env` 容器内可见的 OpenEuler 官方 DNF 软件源；`user_repo` 仅扫描 AI 源本地克隆目录。
+- `pkg_introduce_result.py`：用于结果写入与状态更新。
 - `/setup-build-env`：用于准备或重建 `oe-build-env` 容器。
 - `docker ps` / `docker stop` / `docker rm` / `docker cp`：属于本 skill 直接流程的一部分，可直接使用。
 
-### 本 skill 不应展开说明的内部实现
-
-- 各语言依赖分析脚本、`pre_check_deps.py`、`finalize_dependency_result.py` 属于 `/build-rpm` 链路内部实现，由 `build-rpm` skill 负责说明。
-- `rpm_batch_lookup.py`、`container_exec.py`、`analyze_package.py` 不是本 skill 当前流程的直接调用脚本，不要在本 skill 中展开操作说明。
 
 ### 失败处理
 
 - 若权威步骤需要容器，但 `oe-build-env` 不存在或不可用：应阻断并写清原因，不允许静默回退到本地目录或任意非官方数据源。
-- 若只是宿主机静态分析步骤：不得为了“方便”强制放进容器执行。
+- 若只是宿主机静态分析步骤：不得为了"方便"强制放进容器执行。
 
 ---
 
@@ -73,61 +70,125 @@ allowed-tools:
 
 ### 1. 初始化（仅顶层）
 
-- 顶层包调用（未设置 `--install`）时初始化 `./build_state`、`./reports`、`./sources`。
-- 依赖包调用（已设置 `--install`）跳过此步，复用顶层状态文件。
+- 顶层包调用（默认 `--mode top-level`）时，skill 应在初始化阶段调用 `run_pkg_introduce_flow.py` 的对应子命令，负责重置 `./build_state`、`./reports`、`./sources`，检查 `building.txt` 残留，并创建 `resolved_versions.json`、`dependency_attempts.json` 等状态文件。
+- 依赖包调用（显式 `--mode dependency`）跳过此步，复用顶层状态文件。
 
 ```bash
-# 检查上次是否有异常退出留下的残留
-if [ -s ./build_state/building.txt ]; then
-  echo "[警告] building.txt 有残留，上次可能异常退出，涉及包："
-  cat ./build_state/building.txt
-fi
-rm -rf ./build_state
-mkdir -p ./build_state ./reports ./sources
-touch ./build_state/building.txt ./build_state/introduced.txt
+python3 ${CLAUDE_SKILL_DIR}/scripts/run_pkg_introduce_flow.py init \
+  --pkg <pkgname> \
+  --mode <mode> \
+  --build-state-dir ./build_state \
+  --reports-dir ./reports \
+  --sources-dir ./sources
 ```
 
 ### 2. 上游合规检查
 
-执行：
+skill 在上游合规检查阶段调用 `run_pkg_introduce_flow.py` 的对应子命令：
 
 ```bash
-python3 ${CLAUDE_SKILL_DIR}/scripts/check_repo.py <upstream_url> \
-  -o reports/repo_check_<pkgname>.json
+python3 ${CLAUDE_SKILL_DIR}/scripts/run_pkg_introduce_flow.py repo-check \
+  --pkg <pkgname> \
+  --upstream-url <upstream_url> \
+  --reports-dir ./reports
 ```
 
 检查 `blocking`、`message`、`platform`、`last_updated`。
 
-- 若 `blocking: true`：按“统一失败处理”写结果并终止。
+- 若 `blocking: true`：按"统一失败处理"写结果并终止。
 - 若 API 查询失败但非阻断：允许继续，但需在最终报告中注明。
 
 ### 3. 下载源码
 
-统一使用 `download_source.py`：
+skill 在下载阶段调用 `run_pkg_introduce_flow.py` 的对应子命令：
 
 ```bash
-rm -rf ./sources/<pkgname>
-python3 ${CLAUDE_SKILL_DIR}/scripts/download_source.py \
+python3 ${CLAUDE_SKILL_DIR}/scripts/run_pkg_introduce_flow.py download \
+  --pkg <pkgname> \
   --upstream-url <upstream_url> \
-  --output-dir ./sources -o reports/download_result_<pkgname>.json
+  [--version <expected_version>] \
+  --sources-dir ./sources \
+  --reports-dir ./reports
 ```
+
+规则：
+- 未指定 `--version`：下载默认分支后，脚本自动检测源码中声明的版本号；若含 `SNAPSHOT`、`dev`、`alpha`、`beta`、`rc`、`pre`、`nightly` 等不稳定后缀，**立即阻断**并列出上游可用 tag，要求调用方显式指定 `--version`。
+- 指定 `--version <ver>` 且上游为 git 仓库：按版本优先解析并尝试以下 ref 顺序：`refs/tags/v<ver>` → `refs/tags/<ver>` → `refs/tags/<pkgname>-<ver>` → `refs/heads/v<ver>` → `refs/heads/<ver>` → `refs/heads/release-<ver>` → `refs/heads/release/<ver>` → `refs/heads/<major>.<minor>` → `refs/heads/v<major>.<minor>`。
+- 若所有候选 ref 均不存在：明确失败，不允许静默回退到默认分支。
+- 若上游为 tarball：不自动改写 URL；若指定了 `--version`，仅在后续真实版本校验阶段检查是否匹配。
 
 ### 4. License 检查
 
-执行：
+skill 在 License 检查阶段调用 `run_pkg_introduce_flow.py` 的对应子命令：
 
 ```bash
-python3 ${CLAUDE_SKILL_DIR}/scripts/check_license.py ./sources/<pkgname> \
-  --pkg <pkgname> -o reports/license_check_<pkgname>.json
+python3 ${CLAUDE_SKILL_DIR}/scripts/run_pkg_introduce_flow.py license-check \
+  --pkg <pkgname> \
+  --source-dir ./sources/<pkgname> \
+  --reports-dir ./reports
 ```
 
-检查 `blocking`、`category`、`license_ids`、`message`。
+读取 `category`、`blocking`、`needs_ai_fallback`、`license_ids`、`message`，按三段式决策：
 
-- 若 License 阻断：按“统一失败处理”写结果并终止。
+1. **规则直接通过**
+   - 若 `category` 为 `permissive` / `weak_copyleft` / `strong_copyleft`
+   - 且 `blocking=false`、`needs_ai_fallback=false`
+   - 则直接继续后续流程。
+
+2. **规则直接阻断**
+   - 若 `category` 为 `no_commercial`
+   - 或结果显式 `blocking=true`
+   - 则按"统一失败处理"写结果并终止。
+
+3. **需要 AI 兜底判断**
+   - 若 `category` 为 `unknown` / `unlicensed`
+   - 或结果显式 `needs_ai_fallback=true`
+   - 则不能直接继续，也不能直接判失败；必须进入 AI 兜底判断。
+
+AI 兜底判断要求采用统一模板，必须提供以下内容：
+
+- **触发条件**
+  - 当规则检测结论不确定时触发。
+  - 即：规则脚本输出 `unknown` / `unlicensed`，或结果显式要求 `needs_ai_fallback=true` 时触发。
+
+- **输入**
+  - 规则脚本的原始输出结果。
+  - manifest 中的原始 license 字段值（若有）。
+  - `LICENSE` / `COPYING` / `NOTICE` / `README` 中与许可证相关的候选文本片段（若有）。
+
+- **期望输出**
+  - 推断出的许可证名称与 SPDX 标识（若能判断）。
+  - 支撑结论的证据片段。
+  - 结论置信度与可解释理由。
+  - `can_continue: yes/no`：是否足以继续引入。
+
+- **决策规则**
+  - 向模型提供原始元数据和候选证据，并要求返回带证据的结构化结论。
+  - 只有当模型返回高置信、可解释的分类结果时，才允许继续。
+  - 若 AI 判断为可接受开源许可证且证据充分：继续流程。
+  - 若 AI 判断为 `no_commercial` 或其他明确不合规：按"统一失败处理"阻断。
+  - 若 AI 仍无法给出有证据、可解释的分类结论：按"统一失败处理"阻断，进入人工复核。
 
 ### 5. 识别语言与版本
 
-根据源码目录识别 `<lang>`，并提取 `<version>`。要求在 existing-check 前必须拿到二者。
+skill 在语言与真实版本识别阶段调用 `run_pkg_introduce_flow.py` 的对应子命令：
+
+```bash
+python3 ${CLAUDE_SKILL_DIR}/scripts/run_pkg_introduce_flow.py detect \
+  --pkg <pkgname> \
+  --source-dir ./sources/<pkgname> \
+  [--expected-version <expected_version>] \
+  --reports-dir ./reports
+```
+
+根据源码目录识别 `<lang>`，并提取真实 `<version>`。要求在 existing-check 前必须拿到二者。
+
+若用户指定了 `--version <expected_version>`，则流程语义为：
+- 下载阶段先按 `expected_version` 选择对应源码 ref（git 场景）或直接下载给定 tarball。
+- 下载完成后，仍必须从源码中提取真实版本 `version`。
+- 真实版本与期望版本必须一致，允许做轻量规范化匹配（例如忽略前缀 `v`）。
+- 若二者不匹配：按"统一失败处理"写结果并终止，禁止继续沿用期望版本进入构建链路。
+- 后续 `check_existing_package.py --version` 与 `/build-rpm ... <version>` 一律传真实版本 `version`，不传期望版本。
 
 语言识别规则：
 
@@ -150,14 +211,47 @@ python3 ${CLAUDE_SKILL_DIR}/scripts/extract_version.py <lang> ./sources/<pkgname
 ```
 
 语言特定策略：
-- `python`：`pyproject.toml`（`project.version` / `tool.poetry.version`）→ `VERSION` → `setup.py`
+- `python`：`pyproject.toml`（`project.version` / `tool.poetry.version`）→ `VERSION` → `setup.py` 
 - `rust`：`Cargo.toml` 的 `package.version`
 - `nodejs`：`package.json` 的 `version`
 - `java`：`pom.xml` → `gradle.properties` → `build.gradle(.kts)`
 - `go` / `c` / `cpp` / `ruby`：当前先使用 `VERSION` 兜底，若无则依赖 `git tag`
 
+版本识别按三段式决策：
 
-- 若版本无法可靠确定：按“统一失败处理”写结果并终止。
+1. **规则直接通过**
+   - 若规则提取能够明确得到 `<lang>` 和真实 `<version>`
+   - 则直接继续后续流程。
+
+2. **需要 AI 兜底判断**
+   - 若规则无法识别 `<lang>`
+   - 或规则无法可靠提取真实 `<version>`
+   - 则不能直接继续，也不能直接判失败；必须进入 AI 兜底判断。
+
+AI 兜底判断要求采用统一模板，必须提供以下内容：
+
+- **触发条件**
+  - 当规则无法识别语言或无法可靠提取真实版本时触发。
+
+- **输入**
+  - 规则提取结果（包括空结果）。
+  - `git describe --tags --abbrev=0` 的结果（若有）。
+  - 源码目录中的候选元数据文件内容片段，例如 `pyproject.toml`、`Cargo.toml`、`package.json`、`pom.xml`、`build.gradle`、`VERSION`、`setup.py`、`package.xml`、`CMakeLists.txt`、`*.gemspec`、`Gemfile`。
+  - 用户指定的 `expected_version`（若有）。
+
+- **期望输出**
+  - 推断出的 `<lang>`。
+  - 推断出的真实 `<version>`。
+  - 支撑结论的证据片段。
+  - 结论置信度与可解释理由。
+  - `can_continue: yes/no`：是否足以继续引入。
+
+- **决策规则**
+  - 向模型提供原始元数据和候选证据，并要求返回带证据的结构化结论。
+  - 只有当模型返回高置信、可解释的语言和版本结论时，才允许继续。
+  - 若 AI 能可靠识别 `<lang>` 和真实 `<version>`，且与 `expected_version`（若有）一致：继续流程。
+  - 若 AI 能识别出真实 `<version>`，但与 `expected_version` 不一致：按"统一失败处理"阻断。
+  - 若 AI 仍无法给出有证据、可解释的 `<lang>` 或 `<version>` 结论：按"统一失败处理"阻断，进入人工复核。
 
 ### 6. 准备容器并注入双源
 
@@ -165,24 +259,20 @@ python3 ${CLAUDE_SKILL_DIR}/scripts/extract_version.py <lang> ./sources/<pkgname
 - OpenEuler 官方 DNF 软件源
 - `archive-rpm-sources/config.json` 中 `repo.remote_url` 对应的 AI RPM 源
 
-顶层包调用：先删除旧容器，再调用 `/setup-build-env ./sources/<pkgname>` 重建干净环境。  
-依赖包调用：要求复用已有 `oe-build-env`；若容器不存在，按“统一失败处理”阻断。
-
-```bash
-docker stop oe-build-env 2>/dev/null || true
-docker rm   oe-build-env 2>/dev/null || true
-```
+顶层包调用：直接调用 `setup-build-env` skill（`./sources/<pkgname> <lang>`）重建干净环境；必须显式透传前面已识别出的权威语言类型。旧容器清理与重建由 `setup-build-env` skill 统一负责（`start_container` 会自动 `docker rm -f` 旧容器）。
+依赖包调用：要求复用已有 `oe-build-env`；若容器不存在，按"统一失败处理"阻断。
 
 ### 7. 执行权威 existing-check
 
-执行：
+skill 在 existing-check 阶段调用 `run_pkg_introduce_flow.py` 的对应子命令：
 
 ```bash
-python3 ${CLAUDE_SKILL_DIR}/scripts/check_existing_package.py <pkgname> \
-  --version <version> \
+python3 ${CLAUDE_SKILL_DIR}/scripts/run_pkg_introduce_flow.py existing-check \
+  --pkg <pkgname> \
   --lang <lang> \
+  --version <version> \
   --container oe-build-env \
-  -o reports/existing_check_<pkgname>.json
+  --reports-dir ./reports
 ```
 
 权威语义固定为：
@@ -191,37 +281,33 @@ python3 ${CLAUDE_SKILL_DIR}/scripts/check_existing_package.py <pkgname> \
 
 读取 `decision`、`reason`、`official.highest.version`、`user_repo.highest.version`、`should_skip`。
 
-- 若 `decision` 为 `reuse_*` 或 `block_*`：按“决策语义”和“统一失败/结果写入规则”立即处理并结束流程。
+- 若 `decision` 为 `reuse_*` 或 `block_*`：按"决策语义"和"统一失败/结果写入规则"立即处理并结束流程。
 - 若 `decision` 为 `upgrade_user_repo` 或 `introduce_new`：进入构建分支。
 
-### 8. 构建分支：上传源码 tarball
+### 8. 构建分支：调用 build-rpm
+
+在调用 `build-rpm` 前，先检查是否有对应语言的历史经验文件：
 
 ```bash
-cp -r ./sources/<pkgname> /tmp/<pkgname>-<version>
-tar czf /tmp/<pkgname>-<version>.tar.gz -C /tmp <pkgname>-<version>
-rm -rf /tmp/<pkgname>-<version>
-docker cp /tmp/<pkgname>-<version>.tar.gz oe-build-env:/tmp/
+LESSONS_FILE="${CLAUDE_SKILL_DIR}/../build-rpm/lessons/<lang>.json"
+LESSONS_ARG=""
+[ -f "$LESSONS_FILE" ] && LESSONS_ARG="--lessons $LESSONS_FILE"
 ```
 
-### 9. 构建分支：调用 `build-rpm`
+写入初始化结果（`build pending`），然后调用完整构建：
 
 ```
-/build-rpm <pkgname> <lang> <upstream_url> <version> [--install] [--depth N]
+/build-rpm <pkgname> <lang> <upstream_url> <version> [--install] [--depth N] $LESSONS_ARG
 ```
 
 - 顶层包调用：不传 `--install`
-- 依赖包调用：传入 `--install`，透传 `--depth N`
+- 依赖包调用：传 `--install`
+- `run_pkg_introduce_flow.py` 负责：读取 `build_rpm_result_<pkgname>.json`，依据 `status` / `action` / `reason` 更新 `pkg_introduce_result_<pkgname>.json` 终态
+- 若 `build-rpm` 成功：更新 `action` 为真实值；若失败：写结果（`action=blocked`），然后继续执行 §10 反馈步骤
 
-- 若 `build-rpm` 成功：更新 `pkg_introduce_result_<pkgname>.json` 的 `action` 为真实值。
-- 若 `build-rpm` 失败：按“统一失败处理”写结果并终止。
+### 9. 构建分支：归档（仅顶层且实际发生构建时）
 
-### 10. 构建分支：归档（仅顶层且实际发生构建时）
-
-仅当：
-- 顶层包调用（未设置 `--install`）
-- 且本次 `action ∈ {built_new, upgraded_user_repo}`
-
-执行：
+仅当顶层调用且 `action ∈ {built_new, upgraded_user_repo}` 时触发。
 
 ```bash
 INTRODUCED=$(sort -u ./build_state/introduced.txt | tr '\n' ' ')
@@ -229,15 +315,88 @@ ALL_PKGS="<pkgname> ${INTRODUCED}"
 ```
 
 ```
-/archive-rpm-sources --pkgs <ALL_PKGS>
+/archive-rpm-sources --pkgs <ALL_PKGS> --reports-dir ./reports
 ```
 
 要求：
-- `introduced.txt` 只包含 **实际 built/upgraded** 的依赖
-- `reuse_*` 不进入归档集合
-- 归档成功后更新结果文件中的 `archived=true`
+- `introduced.txt` 只包含 **实际 built/upgraded** 的依赖，`reuse_*` 不进入归档集合
+- 归档脚本推送成功后自动回写 `pkg_introduce_result_<pkgname>.json` 中的 `archived=true`
 
-### 11. 输出结果
+### 10. 事后反馈（build-rpm 有执行时触发，顶层和依赖包均适用）
+
+当 `build-rpm` 实际执行过（无论成功或失败，`action ∈ {built_new, upgraded_user_repo, blocked}`），归档步骤完成后（或失败直接跳过归档后），调用 `/review-rpm`：
+
+```bash
+LESSONS_FILE="${CLAUDE_SKILL_DIR}/../build-rpm/lessons/<lang>.json"
+ROUND_HISTORY_ARG=""
+[ -f "./reports/round_history_<pkgname>.json" ] && \
+  ROUND_HISTORY_ARG="--round-history ./reports/round_history_<pkgname>.json"
+```
+
+```
+/review-rpm feedback <pkgname> \
+  --lang <lang> \
+  --spec /tmp/<pkgname>.spec \
+  --rpmlint /tmp/<pkgname>_rpmlint.txt \
+  --build-result ./reports/build_rpm_result_<pkgname>.json \
+  --build-log /tmp/<pkgname>_build.log \
+  --lessons ${LESSONS_FILE} \
+  --reports-dir ./reports \
+  ${ROUND_HISTORY_ARG}
+```
+
+`review-rpm` 配置了 `context: fork`，会在独立的隔离上下文中执行，完成后将结果写入文件返回主流程。
+
+**约束：只允许读上述输入文件，只允许写 `./reports/feedback_<pkgname>.json` 和 `${LESSONS_FILE}`，不执行任何命令。**
+
+### 11. 生成汇总报告（所有调用，必须执行；顶层包和依赖包均生成独立报告）
+
+无论 `action` 是什么、无论顶层还是依赖包，流程结束前必须为每个包生成一份报告。
+
+**复用场景**（`action ∈ {reused_official, reused_user_repo}`）：直接用 Bash 写一条简短 summary，不调用 `/review-rpm`：
+
+```bash
+cat > ./reports/<pkgname>_introduction_report.md << EOF
+# 引入报告：<pkgname>
+
+| 字段 | 值 |
+|------|-----|
+| 决策 | <decision> |
+| 动作 | <action> |
+| 原因 | <reason> |
+| 版本 | <version> |
+| 引入日期 | $(date +%Y-%m-%d) |
+
+> 复用已有包，未执行构建。
+EOF
+```
+
+**构建场景或失败场景**（`action ∈ {built_new, upgraded_user_repo, blocked}`）：调用 `/review-rpm` 生成完整报告：
+
+```bash
+ROUND_HISTORY_ARG=""
+[ -f "./reports/round_history_<pkgname>.json" ] && \
+  ROUND_HISTORY_ARG="--round-history ./reports/round_history_<pkgname>.json"
+```
+
+```
+/review-rpm summary <pkgname> \
+  --reports-dir ./reports \
+  --dist-dir ./dist \
+  --spec /tmp/<pkgname>.spec \
+  ${ROUND_HISTORY_ARG}
+```
+
+`review-rpm summary` 根据 `pkg_introduce_result_<pkgname>.json` 中的 `action` 自动判断场景：
+- **复用场景**（`reused_*`）：模块说明和 RPM 产物等章节标注"不适用（复用已有包，未执行构建）"
+- **构建场景**（`built_new` / `upgraded_user_repo`）：所有章节填充真实数据；若有 `round_history`，额外生成"修复过程摘要"章节
+- **失败场景**（`blocked`）：在各阶段结论汇总中标注失败原因；若 `exit_reason=abort`，标注"Critic 判定结构性问题"
+
+依赖包报告与顶层报告格式相同，基本信息中需标注包类型（依赖包）和被引入原因（由哪个顶层包触发）。
+
+输出文件：`./reports/<pkgname>_introduction_report.md`
+
+### 12. 输出结果
 
 - 顶层：输出完整结果摘要
 - 依赖包：输出精简结果摘要
@@ -270,6 +429,7 @@ ALL_PKGS="<pkgname> ${INTRODUCED}"
 - 记录 `./reports/import_issues.log`
 - 调用 `pkg_introduce_result.py write` 或 `update` 写入当前状态
 - 给出明确 `reason`
+- 对可供上层回退判断的失败，补充 `failure_type` / `failure_reason`
 
 ### 非构建结束类
 
@@ -287,9 +447,11 @@ ALL_PKGS="<pkgname> ${INTRODUCED}"
 - `decision` 写真实值
 - `action=blocked`
 - `reason="build pending"`
+- 如已知失败分类为空，可显式保留 `failure_type=""`
 
 构建成功后再更新为：
 - `built_new` 或 `upgraded_user_repo`
+- 同步写入真实 `requested_version` / `version`
 
 ---
 
@@ -304,6 +466,7 @@ ALL_PKGS="<pkgname> ${INTRODUCED}"
 pkg-introduce 结果：<pkgname>
 ========================================
 上游地址    : <upstream_url>
+请求版本    : <requested_version 或 空>
 语言 / 版本 : <lang> / <version>
 决策        : <decision>
 动作        : <action>
@@ -320,7 +483,7 @@ License     : <spdx_id>（<category>）
 
 ```
 ✓ dep 处理完成：<pkgname>（depth=<N>）
-  decision=<decision>  action=<action>  lang=<lang>  version=<version>
+  decision=<decision>  action=<action>  requested_version=<requested_version 或 空>  lang=<lang>  version=<version>
 ```
 
 ### 问题日志
@@ -354,4 +517,3 @@ mkdir -p ./reports
 - `introduced.txt` 只记录 **实际 built_new / upgraded_user_repo** 的依赖，不记录 `reuse_*`
 - 统一使用 `python3` 调用本 skill 下的 Python 脚本
 - ROS message/interface 包不能按普通 C/C++ `%cmake` 模板处理；检测到 `package.xml` + `ament_*` / `rosidl_generate_interfaces` 时，应让 `build-rpm` 走 ROS Humble 分支
-- `import-package` 的预扫描不是最终 skip 条件；最终是否复用，必须以第六步的权威 existing-check 为准

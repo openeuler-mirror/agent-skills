@@ -26,16 +26,24 @@ VALID_ACTIONS = {
     "blocked",
 }
 
+VALID_FAILURE_TYPES = {
+    "retryable_version_conflict",
+    "retryable_dependency_resolution_failure",
+    "non_retryable_repo_blocked",
+    "non_retryable_license_blocked",
+    "non_retryable_source_missing",
+    "non_retryable_build_failure",
+    "non_retryable_toolchain_failure",
+    "non_retryable_official_conflict",
+}
+
 # building: 正在处理（替代 building.txt 的循环依赖检测）
 # done:     已完成（成功或复用）
 # failed:   已失败
 VALID_STATUSES = {"building", "done", "failed"}
 
+VALID_MODES = {"top-level", "dependency"}
 BOOLEAN_CHOICES = {"true": True, "false": False}
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def parse_bool(value: str) -> bool:
@@ -43,6 +51,10 @@ def parse_bool(value: str) -> bool:
     if normalized not in BOOLEAN_CHOICES:
         raise argparse.ArgumentTypeError("布尔值只能为 true 或 false")
     return BOOLEAN_CHOICES[normalized]
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def result_path(pkgname: str, reports_dir: str) -> Path:
@@ -74,10 +86,13 @@ def build_updates(args: argparse.Namespace) -> dict[str, Any]:
     field_map = {
         "upstream_url": args.upstream_url,
         "lang": args.lang,
+        "requested_version": args.requested_version,
         "version": args.version,
         "decision": args.decision,
         "action": args.action,
         "reason": args.reason,
+        "failure_type": getattr(args, "failure_type", None),
+        "failure_reason": getattr(args, "failure_reason", None),
         "existing_check": args.existing_check,
         "repo_check": args.repo_check,
         "license_check": args.license_check,
@@ -90,8 +105,8 @@ def build_updates(args: argparse.Namespace) -> dict[str, Any]:
 
     if getattr(args, "depth", None) is not None:
         updates["depth"] = args.depth
-    if getattr(args, "install_mode", None) is not None:
-        updates["install_mode"] = args.install_mode
+    if getattr(args, "mode", None) is not None:
+        updates["mode"] = args.mode
     if getattr(args, "archived", None) is not None:
         updates["archived"] = args.archived
     return updates
@@ -103,12 +118,15 @@ def merge_result(existing: dict[str, Any], pkgname: str, updates: dict[str, Any]
         "pkgname": pkgname,
         "upstream_url": existing.get("upstream_url", ""),
         "lang": existing.get("lang", ""),
+        "requested_version": existing.get("requested_version", ""),
         "version": existing.get("version", ""),
         "decision": existing.get("decision", ""),
         "action": existing.get("action", ""),
         "reason": existing.get("reason", ""),
+        "failure_type": existing.get("failure_type", ""),
+        "failure_reason": existing.get("failure_reason", ""),
         "status": existing.get("status", ""),
-        "install_mode": existing.get("install_mode", False),
+        "mode": existing.get("mode", "top-level"),
         "depth": existing.get("depth", 0),
         "existing_check": existing.get("existing_check", ""),
         "repo_check": existing.get("repo_check", ""),
@@ -127,7 +145,8 @@ def add_common_arguments(parser: argparse.ArgumentParser, *, require_action_reas
     parser.add_argument("--reports-dir", default="./reports", help="结果文件目录，默认 ./reports")
     parser.add_argument("--upstream-url", dest="upstream_url", default=None, help="上游地址")
     parser.add_argument("--lang", default=None, help="语言类型")
-    parser.add_argument("--version", default=None, help="版本号")
+    parser.add_argument("--requested-version", default=None, help="用户请求版本")
+    parser.add_argument("--version", default=None, help="真实版本号")
     parser.add_argument(
         "--decision",
         required=False,
@@ -141,12 +160,14 @@ def add_common_arguments(parser: argparse.ArgumentParser, *, require_action_reas
         help="动作：reused_official/reused_user_repo/upgraded_user_repo/built_new/blocked",
     )
     parser.add_argument("--reason", required=require_action_reason, default=None, help="决策原因")
-    parser.add_argument("--install-mode", type=parse_bool, default=None, help="是否为依赖安装模式：true/false")
+    parser.add_argument("--mode", default=None, help="调用模式：top-level/dependency")
     parser.add_argument("--depth", type=int, default=None, help="当前递归深度")
     parser.add_argument("--existing-check", default=None, help="existing check 结果文件路径")
     parser.add_argument("--repo-check", default=None, help="repo check 结果文件路径")
     parser.add_argument("--license-check", default=None, help="license check 结果文件路径")
     parser.add_argument("--analysis-file", default=None, help="分析结果文件路径")
+    parser.add_argument("--failure-type", default=None, help="失败分类")
+    parser.add_argument("--failure-reason", default=None, help="失败分类原因")
     parser.add_argument("--archived", type=parse_bool, default=None, help="是否已归档：true/false")
     parser.add_argument(
         "--status",
@@ -160,6 +181,8 @@ def command_write(args: argparse.Namespace) -> int:
     validate_choice(args.action, VALID_ACTIONS, "action")
     if getattr(args, "status", None):
         validate_choice(args.status, VALID_STATUSES, "status")
+    if getattr(args, "mode", None):
+        validate_choice(args.mode, VALID_MODES, "mode")
     path = result_path(args.pkgname, args.reports_dir)
     updates = build_updates(args)
     data = merge_result({}, args.pkgname, updates)
@@ -175,6 +198,8 @@ def command_update(args: argparse.Namespace) -> int:
         validate_choice(args.action, VALID_ACTIONS, "action")
     if getattr(args, "status", None) is not None:
         validate_choice(args.status, VALID_STATUSES, "status")
+    if getattr(args, "mode", None) is not None:
+        validate_choice(args.mode, VALID_MODES, "mode")
     path = result_path(args.pkgname, args.reports_dir)
     existing = load_result(path)
     updates = build_updates(args)

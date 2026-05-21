@@ -29,17 +29,95 @@ def load_toml(path: Path) -> dict[str, Any]:
         return {}
 
 
+_VERSION_RE = re.compile(r"""^[ \t]*(?:__version__|version)\s*=\s*['"]([^'"]+)['"]""", re.MULTILINE)
+_CHANGELOG_VERSION_RE = re.compile(r"(?:^|\s)v?(\d+\.\d+[\w.\-]*)")
+
+
+def _scan_version_in_file(path: Path) -> str:
+    """Extract version from a source file via __version__ or version = '...' patterns."""
+    try:
+        content = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return ""
+    m = _VERSION_RE.search(content)
+    return m.group(1).strip() if m else ""
+
+
+def _dynamic_version_fallback(src: Path, pkg_name: str) -> str:
+    """Fallback version extraction for packages using dynamic version in pyproject.toml."""
+    normalized = pkg_name.replace("-", "_").lower()
+
+    # 1. __init__.py candidates
+    init_candidates = [
+        src / "src" / normalized / "__init__.py",
+        src / normalized / "__init__.py",
+    ]
+    for path in init_candidates:
+        v = _scan_version_in_file(path)
+        if v:
+            return v
+
+    # 2. Single-file module (e.g. multipart.py)
+    v = _scan_version_in_file(src / f"{normalized}.py")
+    if v:
+        return v
+
+    # 3. _version.py variants
+    version_file_candidates = [
+        src / "src" / normalized / "_version.py",
+        src / normalized / "_version.py",
+        src / "_version.py",
+        src / "src" / "_version.py",
+    ]
+    for path in version_file_candidates:
+        v = _scan_version_in_file(path)
+        if v:
+            return v
+
+    # 4. src/ glob fallback: first __init__.py found under src/
+    src_dir = src / "src"
+    if src_dir.is_dir():
+        for init_path in sorted(src_dir.glob("*/__init__.py")):
+            v = _scan_version_in_file(init_path)
+            if v:
+                return v
+
+    # 5. CHANGELOG first-line version
+    for changelog_name in ("CHANGELOG.md", "CHANGELOG.rst", "CHANGELOG", "CHANGES.md", "CHANGES"):
+        changelog = src / changelog_name
+        if not changelog.exists():
+            continue
+        try:
+            first_lines = changelog.read_text(encoding="utf-8", errors="ignore").splitlines()[:10]
+        except OSError:
+            continue
+        for line in first_lines:
+            m = _CHANGELOG_VERSION_RE.search(line)
+            if m:
+                return m.group(1).strip()
+
+    return ""
+
+
 def extract_python_version(source_dir: str) -> str:
     src = Path(source_dir)
 
     pyproject = src / "pyproject.toml"
     data = load_toml(pyproject)
     if data:
-        project = data.get("project")
+        project = data.get("project", {})
         if isinstance(project, dict):
+            # Static version field
             version = project.get("version")
             if isinstance(version, str) and version.strip():
                 return version.strip()
+            # Dynamic version declared — try static fallback before giving up
+            dynamic = project.get("dynamic", [])
+            if "version" in (dynamic or []):
+                pkg_name = project.get("name", src.name)
+                v = _dynamic_version_fallback(src, pkg_name)
+                if v:
+                    return v
         tool = data.get("tool")
         if isinstance(tool, dict):
             poetry = tool.get("poetry")

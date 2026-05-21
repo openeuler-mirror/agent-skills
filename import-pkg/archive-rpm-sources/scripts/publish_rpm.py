@@ -9,7 +9,7 @@ RPM 归档脚本：
         C 库 / 非语言运行时二进制            → rpmrebuild 改名，不依赖旧源码
         Python / Java / Ruby / Node         → 报错中止，提示手动处理
       --force-upgrade                        → 跳过 compat 逻辑，直接替换
-  - CI 门禁：提交前在容器内跑 repoclosure，失败则回滚
+  - CI 门禁：提交前在容器内跑 repoclosure（运行时依赖）+ dnf builddep（编译期依赖），失败则回滚
 
 用法：
   python3 publish_rpm.py --pkgs python3-foo
@@ -147,8 +147,33 @@ def copy_pkg_files(
         print(f"[WARN] spec 文件不存在: {spec_src}")
 
     # ── source tarball → <pkg>/（清理旧版本）──
-    base_name = pkg_name.replace("python3-", "")
+    # 去掉语言前缀，得到裸包名（如 "tabulate"、"asio"）用于匹配 RPM 文件名
+    _LANG_PREFIXES = (
+        "python3-", "python-", "ros-humble-", "ros-",
+        "java-", "maven-", "rubygem-", "nodejs-", "npm-",
+        "perl-", "lua-", "php8-", "php-",
+    )
+    base_name = pkg_name
+    for _pfx in _LANG_PREFIXES:
+        if base_name.startswith(_pfx):
+            base_name = base_name[len(_pfx):]
+            break
     normalized_base_name = normalize_name_token(base_name)
+
+    # 从 spec 中提取 %package -n <name> 声明的子包名，用于扩展 RPM 匹配范围
+    def get_named_subpackages(container: str, pkg_name: str) -> List[str]:
+        spec_path = f"/root/rpmbuild/SPECS/{pkg_name}.spec"
+        r = subprocess.run(
+            ["docker", "exec", container, "cat", spec_path],
+            capture_output=True, text=True
+        )
+        if r.returncode != 0:
+            return []
+        names = re.findall(r'^%package\s+-n\s+(\S+)', r.stdout, re.MULTILINE)
+        return names
+
+    named_subpkgs = get_named_subpackages(container, pkg_name)
+    extra_normalized = [normalize_name_token(n) for n in named_subpkgs]
 
     # 从 spec 文件中解析 Source0 的实际文件名（支持 %global 宏展开）
     # 这样可以正确处理 Source0 使用不同于包名的 %{pkg_name} 宏的情况
@@ -185,7 +210,10 @@ def copy_pkg_files(
             return s
         # 将 %{version} 等无法静态解析的宏替换为通配前缀截断
         src0 = expand(src0, macros)
-        # 返回 %{version} 之前的静态前缀（作为文件名匹配前缀）
+        # 若 Source0 是完整 URL，只取最后一段文件名（URL 中 / 之后的部分）
+        if "/" in src0:
+            src0 = src0.rsplit("/", 1)[-1]
+        # 返回 %{version} / 剩余宏 之前的静态前缀（作为文件名匹配前缀）
         prefix = re.split(r'%\{|\$', src0)[0]
         return prefix if prefix else None
 
@@ -225,7 +253,7 @@ def copy_pkg_files(
     # ── 编译好的 RPM → dist/ ──
     result = subprocess.run(
         ["docker", "exec", container, "bash", "-c",
-         "find /root/rpmbuild/RPMS -name '*.rpm' 2>/dev/null"],
+         "find /root/rpmbuild/RPMS /root/rpmbuild/SRPMS -name '*.rpm' 2>/dev/null"],
         capture_output=True, text=True
     )
     for rpm_path in result.stdout.strip().splitlines():
@@ -234,7 +262,16 @@ def copy_pkg_files(
             continue
         rpm_name = Path(rpm_path).name
         normalized_rpm_name = normalize_name_token(rpm_name)
-        if normalized_base_name not in normalized_rpm_name:
+        # 要求 normalized_base_name 出现在词边界处（前缀或跟着 _ ），
+        # 防止短包名（如 "bar"）误匹配 "libbar" / "foobar" 等无关包名
+        all_base_names = [normalized_base_name] + extra_normalized
+        matched = False
+        for nb in all_base_names:
+            pat = r'(?:^|_)' + re.escape(nb) + r'(?:_|$|\d)'
+            if re.search(pat, normalized_rpm_name):
+                matched = True
+                break
+        if not matched:
             continue
         subprocess.run(
             ["docker", "cp", f"{container}:{rpm_path}", str(dist_dir)], check=True
@@ -645,11 +682,11 @@ def update_repodata(dist_dir: Path):
 # CI 门禁
 # ──────────────────────────────────────────────
 
-def run_ci_gate(dist_dir: Path, container: str, new_rpms: list = None):
+def run_ci_gate(dist_dir: Path, container: str, new_rpms: list = None, repo_dir: str = None, pkgs: list = None):
     """
-    将本地 dist/ 复制到容器内，运行 repoclosure 检查本次新增包的依赖可满足性
-    （结合容器内已配置的官方 OS/EPOL 源）。
-    new_rpms: 本次新增的 RPM Path 列表，只检查这些包；为 None 时检查全部。
+    将本地 dist/ 复制到容器内，运行两项检查：
+    1. repoclosure：验证本次新增 RPM 的运行时 Requires 可满足
+    2. dnf builddep：验证本次新增包的 spec BuildRequires 可满足
     失败则抛出 RuntimeError。
     """
     tmp = "/tmp/_ci_dist"
@@ -670,7 +707,7 @@ def run_ci_gate(dist_dir: Path, container: str, new_rpms: list = None):
         capture_output=True
     )
 
-    # 构建 repoclosure 命令：只检查本次新增的包（避免历史包的缺失依赖误报）
+    # ── 检查1：repoclosure（运行时依赖）──
     cmd = [
         "docker", "exec", container,
         "repoclosure",
@@ -678,28 +715,84 @@ def run_ci_gate(dist_dir: Path, container: str, new_rpms: list = None):
         "--newest",
     ]
     if new_rpms:
-        # 从 RPM 文件名提取包名（去掉版本号和架构后缀）
-        import re
         for rpm_path in new_rpms:
             name = rpm_path.name
-            # 去掉 .rpm 后缀，再去掉 -ver-rel.arch 部分
             m = re.match(r'^(.+?)-[^-]+-[^-]+\.[^.]+\.rpm$', name)
             pkg_name = m.group(1) if m else name.replace('.rpm', '')
             cmd += ["--pkg", pkg_name]
-        print(f"[CI] 运行 repoclosure（检查 {len(new_rpms)} 个新包）...")
+        print(f"[CI] 运行 repoclosure（检查 {len(new_rpms)} 个新包的运行时依赖）...")
     else:
         cmd += ["--check", "ci-local"]
-        print(f"[CI] 运行 repoclosure（检查全部包）...")
+        print(f"[CI] 运行 repoclosure（检查全部包的运行时依赖）...")
 
     result = subprocess.run(cmd, capture_output=True, text=True)
     subprocess.run(["docker", "exec", container, "rm", "-rf", tmp], capture_output=True)
 
     if result.returncode != 0:
         raise RuntimeError(
-            f"CI 门禁未通过 — 依赖检查失败:\n"
+            f"CI 门禁未通过 — 运行时依赖检查失败:\n"
             f"{result.stdout.strip()}\n{result.stderr.strip()}"
         )
-    print("[CI] ✓ 依赖检查通过")
+    print("[CI] ✓ 运行时依赖检查通过")
+
+    # ── 检查2：dnf builddep（编译期依赖）──
+    if repo_dir and pkgs:
+        _check_builddeps(container, repo_dir, pkgs, tmp)
+
+
+def _check_builddeps(container: str, repo_dir: str, pkgs: list, tmp_dist: str):
+    """
+    对每个包的 spec 文件运行 dnf builddep --assumeno，验证 BuildRequires 可满足。
+    tmp_dist 是已复制到容器内的 dist/ 路径，用于配置 ci-local 源。
+    """
+    # 先把 dist/ 重新复制进容器（repoclosure 结束后已删除）
+    dist_dir = Path(repo_dir) / "dist"
+    subprocess.run(["docker", "exec", container, "rm", "-rf", tmp_dist], capture_output=True)
+    subprocess.run(["docker", "cp", str(dist_dir), f"{container}:{tmp_dist}"], check=True)
+
+    errors = []
+    for pkg in pkgs:
+        spec_local = Path(repo_dir) / pkg / f"{pkg}.spec"
+        if not spec_local.exists():
+            print(f"[CI] builddep: spec 不存在，跳过 {pkg}")
+            continue
+
+        # 将 spec 拷入容器
+        tmp_spec = f"/tmp/_ci_spec_{pkg}.spec"
+        subprocess.run(
+            ["docker", "cp", str(spec_local), f"{container}:{tmp_spec}"], check=True
+        )
+
+        print(f"[CI] 运行 dnf builddep（检查 {pkg} 的编译期依赖）...")
+        result = subprocess.run(
+            ["docker", "exec", container,
+             "dnf", "builddep", "--assumeno",
+             "--repofrompath", f"ci-local,{tmp_dist}",
+             "--enablerepo", "ci-local",
+             tmp_spec],
+            capture_output=True, text=True
+        )
+        subprocess.run(
+            ["docker", "exec", container, "rm", "-f", tmp_spec], capture_output=True
+        )
+
+        # dnf builddep --assumeno 在依赖可满足时以非零码退出（因为 assumeno 拒绝了安装）
+        # 只有在依赖无法满足时才会输出 "Error:" 并包含 "could not be found" 或 "No match"
+        combined = result.stdout + result.stderr
+        dep_failed = "Error:" in combined and (
+            "could not be found" in combined or "No match" in combined
+        )
+        if dep_failed:
+            errors.append(f"{pkg} BuildRequires 不满足:\n{combined.strip()}")
+        else:
+            print(f"[CI] ✓ {pkg} 编译期依赖检查通过")
+
+    subprocess.run(["docker", "exec", container, "rm", "-rf", tmp_dist], capture_output=True)
+
+    if errors:
+        raise RuntimeError(
+            "CI 门禁未通过 — 编译期依赖检查失败:\n" + "\n\n".join(errors)
+        )
 
 
 # ──────────────────────────────────────────────
@@ -756,6 +849,24 @@ dnf repolist
 # 主流程
 # ──────────────────────────────────────────────
 
+def mark_archived_in_result(pkgs: list, reports_dir: Optional[str]) -> None:
+    """Update pkg_introduce_result_<pkg>.json with archived=true if it exists."""
+    if not reports_dir:
+        return
+    reports_path = Path(reports_dir)
+    for pkg in pkgs:
+        result_file = reports_path / f"pkg_introduce_result_{pkg}.json"
+        if not result_file.exists():
+            continue
+        try:
+            data = json.loads(result_file.read_text(encoding="utf-8"))
+            data["archived"] = True
+            result_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(f"[INFO] 已更新 {result_file.name}: archived=true")
+        except Exception as exc:
+            print(f"[WARN] 无法更新 {result_file.name}: {exc}", file=sys.stderr)
+
+
 def main():
     parser = argparse.ArgumentParser(description="归档 RPM 到 GitHub 仓库")
     parser.add_argument("--container",     default="oe-build-env", help="容器名")
@@ -763,6 +874,8 @@ def main():
     parser.add_argument("--config",        default="config.json",   help="配置文件路径")
     parser.add_argument("--force-upgrade", action="store_true",
                         help="跳过 compat 逻辑，直接替换旧版本（需要 compat 时慎用）")
+    parser.add_argument("--reports-dir",   default="",
+                        help="pkg-introduce reports 目录，归档成功后自动回写 archived=true")
     args = parser.parse_args()
 
     cfg      = load_config(args.config)
@@ -825,7 +938,7 @@ def main():
     # ── Step 4: CI 门禁 ──
     print("\n=== Step 4: CI 门禁 ===")
     try:
-        run_ci_gate(dist_dir, args.container, all_new_rpms)
+        run_ci_gate(dist_dir, args.container, all_new_rpms, repo_dir=local, pkgs=args.pkgs)
     except RuntimeError as e:
         print(f"\n[ERROR] {e}", file=sys.stderr)
         print("[ERROR] 回滚工作区，归档中止", file=sys.stderr)
@@ -835,6 +948,9 @@ def main():
     # ── Step 5: 提交推送 ──
     print("\n=== Step 5: 提交推送 ===")
     git_commit_and_push(local, branch, authed, f"add {', '.join(args.pkgs)}")
+
+    # ── Step 6: 回写 archived=true ──
+    mark_archived_in_result(args.pkgs, args.reports_dir or None)
 
     print(f"""
 ========================================

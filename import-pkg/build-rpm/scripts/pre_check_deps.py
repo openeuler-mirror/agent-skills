@@ -27,8 +27,19 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-SCRIPT_DIR = Path(__file__).parent.parent.parent / "pkg-introduce" / "scripts"
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+from rpm_naming import get_rpm_pkg_name  # noqa: E402
+
+try:
+    from packaging.requirements import Requirement
+    from packaging.specifiers import Specifier
+except Exception:  # pragma: no cover - optional runtime dependency
+    Requirement = None
+    Specifier = None
+
 CHECK_EXISTING_SCRIPT = SCRIPT_DIR / "check_existing_package.py"
+ANALYZE_PYTHON_SCRIPT = SCRIPT_DIR / "analyze_python_deps.py"
 
 # ── 语言 → 分析脚本映射 ───────────────────────────────────────────────────────
 
@@ -40,7 +51,6 @@ ANALYZERS = {
     "cpp":    {"script": "analyze_cpp_deps.py",    "extra_args": []},
     "nodejs": {"script": "analyze_nodejs_deps.py", "extra_args": []},
     "java":   {"script": "analyze_java_deps.py",   "extra_args": []},
-    "ruby":   {"script": "analyze_ruby_deps.py",   "extra_args": []},
 }
 
 
@@ -59,6 +69,27 @@ def load_existing_checker() -> Any:
 EXISTING_CHECKER = load_existing_checker()
 
 
+def load_python_upstream_helpers() -> dict[str, Any]:
+    script_dir = str(SCRIPT_DIR)
+    if script_dir not in sys.path:
+        sys.path.insert(0, script_dir)
+    spec = importlib.util.spec_from_file_location("analyze_python_deps", ANALYZE_PYTHON_SCRIPT)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"无法加载脚本: {ANALYZE_PYTHON_SCRIPT}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return {
+        "fetch_pypi_info": module.fetch_pypi_info,
+        "canonical_upstream_url": module.canonical_upstream_url,
+        "classify_upstream_url": module.classify_upstream_url,
+        "normalize_candidate_upstream": module.normalize_candidate_upstream,
+        "candidate_urls_from_pypi_info": module.candidate_urls_from_pypi_info,
+    }
+
+
+PYTHON_UPSTREAM_HELPERS = load_python_upstream_helpers()
+
+
 # ── PyPI 上游地址查询 ──────────────────────────────────────────────────────────
 
 def _github_search_repo(pkg_name: str) -> str:
@@ -75,7 +106,9 @@ def _github_search_repo(pkg_name: str) -> str:
                 )
                 data = json.loads(urllib.request.urlopen(req, timeout=8).read())
                 if data.get("html_url"):
-                    return data["html_url"]
+                    normalized_url = normalize_upstream_candidate(data["html_url"])
+                    if normalized_url:
+                        return normalized_url
             except Exception:
                 pass
     # fallback: GitHub Search API
@@ -90,38 +123,49 @@ def _github_search_repo(pkg_name: str) -> str:
             name_lower = item.get("name", "").lower().replace("-", "_")
             pkg_lower = pkg_name.lower().replace("-", "_")
             if name_lower == pkg_lower and item.get("html_url"):
-                return item["html_url"]
+                normalized_url = normalize_upstream_candidate(item["html_url"])
+                if normalized_url:
+                    return normalized_url
     except Exception:
         pass
     return ""
 
 
+def classify_upstream_candidate(url: str) -> str:
+    return PYTHON_UPSTREAM_HELPERS["classify_upstream_url"](url)
+
+
+def normalize_upstream_candidate(url: str) -> str:
+    return PYTHON_UPSTREAM_HELPERS["normalize_candidate_upstream"](url)
+
+
+def is_trusted_upstream_url(url: str) -> bool:
+    return classify_upstream_candidate(url) == "trusted"
+
+
+def is_suspicious_upstream_url(url: str) -> bool:
+    return classify_upstream_candidate(url) == "suspicious"
+
+
 def get_pypi_upstream(pypi_name: str) -> str:
-    """从 PyPI JSON API 提取项目上游地址（GitHub/GitLab 优先）。
-    若 PyPI metadata 无 URL，额外尝试 GitHub 搜索。
-    """
+    """从 PyPI JSON API 提取可信源码仓地址，必要时回退到 GitHub 搜索。"""
     try:
-        req = urllib.request.Request(
-            f"https://pypi.org/pypi/{pypi_name}/json",
-            headers={"User-Agent": "pre_check_deps/1.0"},
-        )
-        info = json.loads(urllib.request.urlopen(req, timeout=10).read())["info"]
-        candidates = []
-        if info.get("home_page"):
-            candidates.append(info["home_page"])
-        for url in (info.get("project_urls") or {}).values():
-            if url:
-                candidates.append(url)
-        for url in candidates:
-            if url.startswith("http") and "pypi.org" not in url:
-                return url
+        pypi_json = PYTHON_UPSTREAM_HELPERS["fetch_pypi_info"](pypi_name)
+        if pypi_json:
+            canonical = PYTHON_UPSTREAM_HELPERS["canonical_upstream_url"](pypi_json, pypi_name)
+            if canonical and is_trusted_upstream_url(canonical):
+                return canonical
+            info = pypi_json.get("info", {})
+            for url in PYTHON_UPSTREAM_HELPERS["candidate_urls_from_pypi_info"](info):
+                normalized = normalize_upstream_candidate(url)
+                if normalized and is_trusted_upstream_url(normalized):
+                    return normalized
     except Exception:
         pass
-    # PyPI metadata 无有效 URL，尝试 GitHub 搜索
     github_url = _github_search_repo(pypi_name)
-    if github_url:
+    if github_url and is_trusted_upstream_url(github_url):
         return github_url
-    return f"https://pypi.org/project/{pypi_name}"
+    return ""
 
 
 # ── 通用辅助 ──────────────────────────────────────────────────────────────────
@@ -287,17 +331,13 @@ def merge_official_source_older_result(
 
 
 def resolve_upstream_url(name: str, lang: str) -> str:
-    """尝试为任意语言的依赖包解析上游 URL。
-    策略：语言特定注册表 → GitHub 搜索 → 空串（由调用方决定如何处理）。
-    """
+    """尝试为任意语言的依赖包解析可信上游仓库根 URL。"""
     if not name:
         return ""
     if lang == "go":
-        # Go module path 本身就是 URL，直接推导，无需查注册表
-        # 例：github.com/gin-gonic/gin → https://github.com/gin-gonic/gin
         if name.startswith("github.com/") or name.startswith("gitlab.com/") or name.startswith("golang.org/"):
-            return "https://" + name
-        # 其他 module path（如 k8s.io/xxx）走 GitHub 搜索兜底
+            candidate = normalize_upstream_candidate("https://" + name)
+            return candidate if is_trusted_upstream_url(candidate) else ""
         return _github_search_repo(name.split("/")[-1])
     if lang == "python":
         return get_pypi_upstream(name)
@@ -309,8 +349,9 @@ def resolve_upstream_url(name: str, lang: str) -> str:
             )
             data = json.loads(urllib.request.urlopen(req, timeout=10).read())
             repo = data.get("crate", {}).get("repository") or data.get("crate", {}).get("homepage")
-            if repo:
-                return repo
+            normalized = normalize_upstream_candidate(repo) if repo else ""
+            if normalized and is_trusted_upstream_url(normalized):
+                return normalized
         except Exception:
             pass
     if lang == "nodejs":
@@ -325,34 +366,196 @@ def resolve_upstream_url(name: str, lang: str) -> str:
                 url = repo.get("url", "")
             else:
                 url = str(repo)
-            # 规范化 git+https://github.com/... 或 github:foo/bar
             url = url.replace("git+", "").replace("git://", "https://")
             if url.startswith("github:"):
                 url = "https://github.com/" + url[7:]
-            url = url.rstrip("/").removesuffix(".git")
-            if url and "pypi.org" not in url:
-                return url
+            normalized = normalize_upstream_candidate(url)
+            if normalized and is_trusted_upstream_url(normalized):
+                return normalized
         except Exception:
             pass
-    # 通用兜底：GitHub 搜索
     return _github_search_repo(name)
+
+
+def ensure_dependency_upstream(item: dict[str, Any], lang: str) -> tuple[str, str]:
+    name = item.get("name") or item.get("dep") or ""
+    existing_url = item.get("upstream_url", "") or ""
+    suspicious_urls: list[str] = []
+
+    normalized_existing = normalize_upstream_candidate(existing_url)
+    if normalized_existing and is_trusted_upstream_url(normalized_existing):
+        return normalized_existing, "provided"
+    if existing_url:
+        suspicious_urls.append(existing_url)
+        if normalized_existing and not is_trusted_upstream_url(normalized_existing):
+            suspicious_urls.append(normalized_existing)
+
+    resolved = resolve_upstream_url(name, lang)
+    if resolved and is_trusted_upstream_url(resolved):
+        return resolved, "registry"
+    if resolved:
+        suspicious_urls.append(resolved)
+
+    if lang == "python" and name:
+        metadata_url = f"https://pypi.org/project/{name}"  # noqa: F841 — kept for future use
+
+    return "", "unresolved"
 
 
 def normalize_dependency_item(item: dict[str, Any], lang: str, category: str) -> dict[str, Any]:
     name = item.get("name") or item.get("dep") or ""
-    upstream_url = item.get("upstream_url", "")
-    if not upstream_url and name:
-        upstream_url = resolve_upstream_url(name, lang)
+    upstream_url, upstream_resolution = ensure_dependency_upstream(item, lang)
+    requirement = item.get("requirement", "")
+    raw_requirement_info = item.get("requirement_info")
+    if not isinstance(raw_requirement_info, dict):
+        raw_requirement_info = None
+    constraint_type, requirement_info = classify_requirement_constraint(requirement, raw_requirement_info)
+    version_source = infer_version_source({**item, "requirement_info": requirement_info})
     return {
         "name": name,
         "dep": item.get("dep") or name,
         "spec": item.get("spec") or item.get("dep") or name,
         "type": item.get("type") or lang,
         "category": category,
-        "requirement": item.get("requirement", ""),
+        "requirement": requirement,
+        "constraint": requirement,
+        "constraint_type": constraint_type,
+        "version_source": version_source,
+        "requirement_info": requirement_info,
         "rpm_requirement": item.get("rpm_requirement") or item.get("rpm_name") or item.get("dep") or name,
+        "rpm_pkg_name": item.get("rpm_pkg_name") or get_rpm_pkg_name(lang, name),
         "upstream_url": upstream_url,
+        "upstream_resolution": upstream_resolution,
     }
+
+
+def classify_requirement_constraint(requirement: str, requirement_info: dict[str, Any] | None) -> tuple[str, dict[str, Any]]:
+    normalized_requirement = (requirement or "").strip()
+    parsed_info = dict(requirement_info or {})
+
+    if not normalized_requirement:
+        return "unbounded", parsed_info
+
+    info_status = (parsed_info.get("status") or "").strip()
+    if info_status == "unknown":
+        if Requirement is not None:
+            try:
+                parsed_requirement = Requirement(f"placeholder{normalized_requirement}")
+            except Exception:
+                try:
+                    parsed_requirement = Requirement(normalized_requirement)
+                except Exception:
+                    return "unknown", parsed_info
+            normalized_specifiers = [str(spec) for spec in parsed_requirement.specifier]
+            if not normalized_specifiers:
+                return "unbounded", parsed_info
+            exact_values: list[str] = []
+            specifier_records: list[dict[str, str]] = []
+            for spec_text in normalized_specifiers:
+                matched = False
+                for operator in ("===", "==", ">=", "<=", "!=", "~=", ">", "<"):
+                    if spec_text.startswith(operator):
+                        version = spec_text[len(operator):].strip()
+                        specifier_records.append({"operator": operator, "version": version})
+                        if operator in {"==", "==="} and version:
+                            exact_values.append(version)
+                        matched = True
+                        break
+                if not matched:
+                    specifier_records.append({"operator": "", "version": spec_text})
+            if specifier_records and "specifiers" not in parsed_info:
+                parsed_info["specifiers"] = specifier_records
+            if len(set(exact_values)) == 1:
+                parsed_info.setdefault("exact_version", exact_values[0])
+                return "exact", parsed_info
+            return "range", parsed_info
+        return "unknown", parsed_info
+
+    exact_version = (parsed_info.get("exact_version") or "").strip()
+    if exact_version:
+        return "exact", parsed_info
+
+    clauses = parsed_info.get("clauses")
+    if isinstance(clauses, list) and clauses:
+        exact_ops = {"==", "==="}
+        range_ops = {">", ">=", "<", "<=", "~=", "!="}
+        clause_ops = [
+            str(item.get("operator") or "").strip()
+            for item in clauses
+            if isinstance(item, dict) and str(item.get("operator") or "").strip()
+        ]
+        if clause_ops:
+            if all(op in exact_ops for op in clause_ops):
+                exact_candidates = [
+                    str(item.get("version") or "").strip()
+                    for item in clauses
+                    if isinstance(item, dict)
+                ]
+                exact_candidates = [item for item in exact_candidates if item]
+                if len(set(exact_candidates)) == 1 and exact_candidates:
+                    parsed_info.setdefault("exact_version", exact_candidates[0])
+                    return "exact", parsed_info
+            if any(op in range_ops for op in clause_ops):
+                if "specifiers" not in parsed_info:
+                    parsed_info["specifiers"] = [
+                        {
+                            "operator": str(item.get("operator") or "").strip(),
+                            "version": str(item.get("version") or "").strip(),
+                        }
+                        for item in clauses
+                        if isinstance(item, dict)
+                    ]
+                return "range", parsed_info
+
+    specifiers = parsed_info.get("specifiers")
+    if isinstance(specifiers, list) and specifiers:
+        has_range = any((item.get("operator") or "") in {">", ">=", "<", "<=", "~=", "!="} for item in specifiers if isinstance(item, dict))
+        exact_ops = {"==", "==="}
+        only_exact = all((item.get("operator") or "") in exact_ops for item in specifiers if isinstance(item, dict))
+        if only_exact:
+            exact_candidates = [str(item.get("version") or "").strip() for item in specifiers if isinstance(item, dict)]
+            exact_candidates = [item for item in exact_candidates if item]
+            if len(exact_candidates) == 1:
+                parsed_info.setdefault("exact_version", exact_candidates[0])
+                return "exact", parsed_info
+        if has_range:
+            return "range", parsed_info
+        return "unknown", parsed_info
+
+    if Requirement is not None:
+        try:
+            parsed_requirement = Requirement(normalized_requirement)
+            normalized_specifiers = [str(spec) for spec in parsed_requirement.specifier]
+            if not normalized_specifiers:
+                return "unbounded", parsed_info
+            if len(normalized_specifiers) == 1:
+                spec_text = normalized_specifiers[0]
+                for operator in ("===", "=="):
+                    if spec_text.startswith(operator):
+                        parsed_info.setdefault("exact_version", spec_text[len(operator):].strip())
+                        return "exact", parsed_info
+            return "range", parsed_info
+        except Exception:
+            return "unknown", parsed_info
+
+    return "unknown", parsed_info
+
+
+def infer_version_source(item: dict[str, Any], existing_check: dict[str, Any] | None = None) -> str:
+    explicit_source = (item.get("version_source") or "").strip()
+    if explicit_source:
+        return explicit_source
+
+    requirement_info = (item.get("requirement_info") or {}) if isinstance(item.get("requirement_info"), dict) else {}
+    if requirement_info.get("source"):
+        return str(requirement_info["source"]).strip() or "unknown"
+
+    requested = dict((existing_check or {}).get("requested") or {})
+    requested_requirement_info = requested.get("requirement_info")
+    if isinstance(requested_requirement_info, dict) and requested_requirement_info.get("source"):
+        return str(requested_requirement_info["source"]).strip() or "unknown"
+
+    return "manifest" if (item.get("requirement") or "").strip() else "unknown"
 
 
 def dependency_items_from_result(lang: str, result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -390,7 +593,27 @@ def classify_dependency(dep: dict[str, Any], lang: str, source_index: dict[tuple
     source_item = lookup_source_item(dep, source_index)
     source_check = summarize_source_match(dep, source_item)
 
+    original_requirement_info = dep.get("requirement_info") if isinstance(dep.get("requirement_info"), dict) else None
+    dep["constraint_type"], dep["requirement_info"] = classify_requirement_constraint(
+        dep.get("constraint") or dep.get("requirement", ""),
+        original_requirement_info,
+    )
+
+    debug_flow = {
+        "name": dep.get("name") or dep.get("dep") or "",
+        "before": {
+            "constraint": dep.get("constraint") or dep.get("requirement", ""),
+            "constraint_type": dep.get("constraint_type", "unknown"),
+            "requirement_info": dep.get("requirement_info", {}),
+        },
+    }
+
     if source_check["satisfies_requirement"]:
+        debug_flow["after"] = {
+            "constraint_type": dep.get("constraint_type", "unknown"),
+            "requirement_info": dep.get("requirement_info", {}),
+            "decision": "reuse_source",
+        }
         return {
             **dep,
             "source_check": source_check,
@@ -398,6 +621,7 @@ def classify_dependency(dep: dict[str, Any], lang: str, source_index: dict[tuple
             "decision": "reuse_source",
             "action": "resolved",
             "reason": source_check["reason"],
+            "debug_constraint_flow": debug_flow,
         }
 
     existing_check = EXISTING_CHECKER.check_existing_package(
@@ -405,15 +629,43 @@ def classify_dependency(dep: dict[str, Any], lang: str, source_index: dict[tuple
         requirement=dep.get("requirement", ""),
         lang=lang,
     )
+    requested = dict(existing_check.get("requested") or {})
+    requested_requirement_info = requested.get("requirement_info")
+    if isinstance(requested_requirement_info, dict):
+        dep["requirement_info"] = requested_requirement_info
+        dep["constraint_type"], dep["requirement_info"] = classify_requirement_constraint(
+            dep.get("constraint") or dep.get("requirement", ""),
+            requested_requirement_info,
+        )
+        dep["version_source"] = infer_version_source(dep, existing_check)
+    elif dep.get("requirement"):
+        dep["constraint_type"], dep["requirement_info"] = classify_requirement_constraint(
+            dep.get("constraint") or dep.get("requirement", ""),
+            dep.get("requirement_info") if isinstance(dep.get("requirement_info"), dict) else None,
+        )
     if source_check["status"] == "older" and not existing_check.get("official", {}).get("exists"):
         existing_check = merge_official_source_older_result(dep, source_check, existing_check)
     decision = existing_check["decision"]
     if decision in {"reuse_official", "reuse_user_repo"}:
         action = "resolved"
+        reason = existing_check["reason"]
     elif decision == "block_official_older":
         action = "blocked"
+        reason = existing_check["reason"]
     else:
-        action = "recurse"
+        if not dep.get("upstream_url"):
+            action = "blocked"
+            reason = "无法确定依赖上游源码仓库地址"
+        else:
+            action = "recurse"
+            reason = existing_check["reason"]
+
+    debug_flow["after"] = {
+        "constraint_type": dep.get("constraint_type", "unknown"),
+        "requirement_info": dep.get("requirement_info", {}),
+        "decision": decision,
+        "action": action,
+    }
 
     return {
         **dep,
@@ -421,7 +673,8 @@ def classify_dependency(dep: dict[str, Any], lang: str, source_index: dict[tuple
         "existing_check": existing_check,
         "decision": decision,
         "action": action,
-        "reason": existing_check["reason"],
+        "reason": reason,
+        "debug_constraint_flow": debug_flow,
     }
 
 

@@ -51,11 +51,13 @@ python3 scripts/extract_pr_info.py <owner> <repo> <pr_number> --no-diff
 
 ### 第二步：调用 pkg-introduce 完成权威引入流程
 
-提取到 `UPSTREAM_URL` 和 `PKGNAME` 后，调用核心 skill：
+提取到 `UPSTREAM_URL`、`PKGNAME` 后，调用核心 skill：
 
 ```
-/pkg-introduce <pkgname> <upstream_url>
+/pkg-introduce <pkgname> <upstream_url> [--version <ver>]
 ```
+
+若后续 PR / YAML 元数据中带有明确版本字段，可透传 `--version <ver>`；若无版本信息，则保持当前默认调用方式，不传 `--version`。
 
 `pkg-introduce` 负责：
 - 上游仓库合规检查
@@ -64,6 +66,8 @@ python3 scripts/extract_pr_info.py <owner> <repo> <pr_number> --no-diff
 - 语言类型检测
 - 版本检测
 - **权威 existing-check（version-aware decision）**
+- 初始化会话级依赖版本状态（顶层调用）
+- 依赖递归前的版本解析、锁复用与候选回退
 - 部署编译环境（仅在需要新建/升级时）
 - 依赖分析，递归引入缺失依赖
 - 编译验证（`build-rpm`）

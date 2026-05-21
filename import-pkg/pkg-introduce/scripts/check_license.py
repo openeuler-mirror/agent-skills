@@ -375,12 +375,14 @@ def check_license(source_dir: str) -> dict:
     检查 source_dir 的 license，返回结构化结果。
 
     结果字段：
-      license_ids   : list[str]   SPDX 标识符列表（可能多个）
-      category      : str         最严格分类
-      source        : str         信息来源文件
-      blocking      : bool        是否阻断
-      message       : str         人读信息
-      all_categories: list[str]   所有分类（多许可证时）
+      license_ids        : list[str]   SPDX 标识符列表（可能多个）
+      category           : str         最严格分类
+      source             : str         信息来源文件
+      blocking           : bool        直接规则阻断（仅明确不合规时为 True）
+      needs_ai_fallback  : bool        是否必须触发 AI 兜底判断
+      final_blocking     : bool        当前规则阶段的最终阻断状态
+      message            : str         人读信息
+      all_categories     : list[str]   所有分类（多许可证时）
     """
     # ── Step 1：manifest ──
     manifest_lic, manifest_src = detect_license_from_manifest(source_dir)
@@ -407,8 +409,10 @@ def check_license(source_dir: str) -> dict:
             "license_ids": [],
             "category": "unknown",
             "source": unknown_source,
-            "blocking": True,
-            "message": f"找到 {unknown_source} 但无法识别许可证类型，需人工确认，阻断",
+            "blocking": False,
+            "needs_ai_fallback": True,
+            "final_blocking": False,
+            "message": f"找到 {unknown_source} 但规则脚本无法识别许可证类型，需要 AI 兜底判断后再决定是否继续",
             "all_categories": ["unknown"],
         }
 
@@ -418,8 +422,10 @@ def check_license(source_dir: str) -> dict:
             "license_ids": [],
             "category": "unlicensed",
             "source": source or "none",
-            "blocking": True,
-            "message": "未找到任何 License 声明（无 manifest 字段，无 LICENSE 文件），阻断",
+            "blocking": False,
+            "needs_ai_fallback": True,
+            "final_blocking": False,
+            "message": "未找到任何 License 声明（无 manifest 字段，无 LICENSE 文件），需要 AI 兜底判断后再决定是否继续",
             "all_categories": ["unlicensed"],
         }
 
@@ -429,14 +435,15 @@ def check_license(source_dir: str) -> dict:
     PRIORITY = ["no_commercial", "unknown", "strong_copyleft", "weak_copyleft", "permissive"]
     worst = min(categories, key=lambda c: PRIORITY.index(c) if c in PRIORITY else 99)
 
-    blocking = worst in ("no_commercial", "unknown")
+    blocking = worst == "no_commercial"
+    needs_ai_fallback = worst == "unknown"
 
     license_str = " / ".join(spdx_ids)
 
     if worst == "no_commercial":
         msg = f"{license_str} 限制商用，不符合 OpenEuler 开源要求，阻断"
     elif worst == "unknown":
-        msg = f"{license_str} 无法识别，需人工确认后方可引入，阻断"
+        msg = f"{license_str} 规则脚本无法识别，需要 AI 兜底判断并给出可解释结论后方可继续"
     elif worst == "strong_copyleft":
         msg = f"{license_str} 为强 Copyleft 许可证，OpenEuler 可分发，spec License 字段需正确填写"
     elif worst == "weak_copyleft":
@@ -449,6 +456,8 @@ def check_license(source_dir: str) -> dict:
         "category": worst,
         "source": source,
         "blocking": blocking,
+        "needs_ai_fallback": needs_ai_fallback,
+        "final_blocking": blocking,
         "message": msg,
         "all_categories": categories,
     }
@@ -456,15 +465,21 @@ def check_license(source_dir: str) -> dict:
 
 def print_report(result: dict, pkg_name: str = "") -> None:
     label = f"[{pkg_name}] " if pkg_name else ""
-    status = "❌ 阻断" if result["blocking"] else (
-        "⚠️  警告" if result["category"] in ("strong_copyleft", "weak_copyleft") else "✅ 通过"
-    )
+    if result["blocking"]:
+        status = "❌ 规则阻断"
+    elif result.get("needs_ai_fallback"):
+        status = "🤖 需要 AI 兜底判断"
+    elif result["category"] in ("strong_copyleft", "weak_copyleft"):
+        status = "⚠️  警告"
+    else:
+        status = "✅ 通过"
     print(f"\nLicense 检查报告 {label}")
     print("─" * 50)
     print(f"状态      : {status}")
     print(f"License   : {', '.join(result['license_ids']) or '未识别'}")
     print(f"分类      : {result['category']}")
     print(f"来源      : {result['source']}")
+    print(f"AI 兜底判断: {'需要' if result.get('needs_ai_fallback') else '不需要'}")
     print(f"说明      : {result['message']}")
     print("─" * 50)
 

@@ -17,18 +17,49 @@ def _find_first_text(root: ET.Element, name: str) -> str:
     return ""
 
 
+def _extract_project_version(root: ET.Element) -> str:
+    """从 pom.xml 的 <project> 直接子节点 <version> 取版本，避免误取插件配置里的版本号。"""
+    for child in root:
+        if _strip_namespace(child.tag) == "version" and child.text and child.text.strip():
+            v = child.text.strip()
+            if not v.startswith("${"):
+                return v
+    return ""
+
+
+def _extract_parent_version(root: ET.Element) -> str:
+    """从 pom.xml 的 <parent>/<version> 取版本（聚合 pom 无直接 <version> 时的兜底）。"""
+    for child in root:
+        if _strip_namespace(child.tag) == "parent":
+            for sub in child:
+                if _strip_namespace(sub.tag) == "version" and sub.text and sub.text.strip():
+                    v = sub.text.strip()
+                    if not v.startswith("${"):
+                        return v
+    return ""
+
+
+def _try_pom(pom_path: Path) -> str:
+    try:
+        root = ET.fromstring(pom_path.read_text(encoding="utf-8", errors="ignore"))
+        return _extract_project_version(root) or _extract_parent_version(root)
+    except Exception:
+        return ""
+
+
 def extract_java_version(source_dir: str) -> str:
     src = Path(source_dir)
 
     pom_xml = src / "pom.xml"
     if pom_xml.exists():
-        try:
-            root = ET.fromstring(pom_xml.read_text(encoding="utf-8", errors="ignore"))
-            version = _find_first_text(root, "version")
-            if version and not version.startswith("${"):
+        version = _try_pom(pom_xml)
+        if version:
+            return version
+        # Aggregator pom may delegate version to a submodule pom (e.g. parent/pom.xml)
+        for candidate in sorted(src.glob("*/pom.xml")):
+            version = _try_pom(candidate)
+            if version:
                 return version
-        except Exception:
-            pass
 
     gradle_properties = src / "gradle.properties"
     if gradle_properties.exists():
