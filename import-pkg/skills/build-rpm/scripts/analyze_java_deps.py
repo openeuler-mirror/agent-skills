@@ -8,8 +8,8 @@ Java 包 RPM 依赖分析脚本
 
 RPM 查询策略：
   通过共享的一次性批量查询检查 `mvn(groupId:artifactId)` Provides。
-  OpenEuler 的 Java RPM 包遵循 mvn() Provides 规范。
-  大多数 Maven 依赖在 OpenEuler 上缺失，需要 bundle 或 generate_spec。
+  openEuler 的 Java RPM 包遵循 mvn() Provides 规范。
+  大多数 Maven 依赖在 openEuler 上缺失，需要 bundle 或 generate_spec。
 
 用法：
   python3 analyze_java_deps.py <source_dir>
@@ -337,7 +337,7 @@ def main():
     parser = argparse.ArgumentParser(description="Java 包 RPM 依赖分析")
     parser.add_argument("source_dir", help="Java 项目源码目录")
     parser.add_argument("--check-rpm", action="store_true", help="在容器内查询 RPM 可用性")
-    parser.add_argument("--container", default="oe-build-env", help="OpenEuler 容器名")
+    parser.add_argument("--container", default="oe-build-env", help="openEuler 容器名")
     parser.add_argument("-o", "--output", default="", help="结果输出到 JSON 文件")
     args = parser.parse_args()
 

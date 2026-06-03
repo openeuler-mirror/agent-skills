@@ -2,7 +2,7 @@
 """
 RPM 编译前依赖预检脚本
 
-在 rpmbuild 循环前调用，分析运行时依赖在 OpenEuler 源、官方归档仓库、用户 RPM 仓库中的可用性，
+在 rpmbuild 循环前调用，分析运行时依赖在 openEuler 源、官方归档仓库、用户 RPM 仓库中的可用性，
 输出需要递归引入的包列表（格式：<pkgname> <upstream_url>），供调用方继续处理。
 
 用法：
@@ -222,7 +222,7 @@ def summarize_source_match(dep: dict[str, Any], source_item: dict[str, Any] | No
             "version": None,
             "release": None,
             "satisfies_requirement": False,
-            "reason": "OpenEuler 源中未找到可用包",
+            "reason": "openEuler 源中未找到可用包",
         }
 
     requirement_info = EXISTING_CHECKER.parse_requirement(requirement)
@@ -230,18 +230,18 @@ def summarize_source_match(dep: dict[str, Any], source_item: dict[str, Any] | No
     if requirement_info["status"] == "parsed":
         satisfies = EXISTING_CHECKER.evaluate_requirement(version, requirement_info)
         if satisfies:
-            reason = f"OpenEuler 源中已有满足约束 {requirement} 的包"
+            reason = f"openEuler 源中已有满足约束 {requirement} 的包"
             status = "satisfied"
         else:
-            reason = f"OpenEuler 源中已有包，但版本 {version or '未知'} 不满足约束 {requirement}"
+            reason = f"openEuler 源中已有包，但版本 {version or '未知'} 不满足约束 {requirement}"
             status = "older"
     elif requirement_info["status"] == "unknown":
         satisfies = False
-        reason = f"OpenEuler 源中已有包，但版本约束 {requirement} 无法可靠解析，保守继续"
+        reason = f"openEuler 源中已有包，但版本约束 {requirement} 无法可靠解析，保守继续"
         status = "unknown_requirement"
     else:
         satisfies = True
-        reason = "OpenEuler 源中已有可用包"
+        reason = "openEuler 源中已有可用包"
         status = "satisfied"
 
     return {
@@ -462,7 +462,7 @@ def infer_version_source(item: dict[str, Any], existing_check: dict[str, Any] | 
 def dependency_items_from_result(lang: str, result: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """返回 (pending_items, preblocked_items)。
 
-    preblocked_items: analyze 阶段已确认版本冲突（官方源有但版本低）的依赖，
+    preblocked_items: analyze 阶段已确认版本冲突（社区源有但版本低）的依赖，
                       携带 found_version，供 classify_dependency 直接决策，
                       无需再调用 check_existing_package。
     """
@@ -499,7 +499,7 @@ def dependency_items_from_result(lang: str, result: dict[str, Any]) -> tuple[lis
         norm["preblocked"] = True
         preblocked.append(norm)
 
-    # nodejs: 同时处理运行时 npm 依赖中未在官方源找到的包
+    # nodejs: 同时处理运行时 npm 依赖中未在社区源找到的包
     if lang == "nodejs":
         runtime_deps = result.get("runtime_deps") or {}
         for item in runtime_deps.get("missing", []):
@@ -527,7 +527,7 @@ def build_available_index_for_result(lang: str, result: dict[str, Any]) -> dict[
 
 
 def classify_preblocked_dependency(dep: dict[str, Any], lang: str) -> dict[str, Any]:
-    """处理 analyze 阶段已确认版本冲突的依赖（官方源有但版本低）。
+    """处理 analyze 阶段已确认版本冲突的依赖（社区源有但版本低）。
 
     对应原 classify_dependency 里 decision=block_official_older 的分支：
     - compat 模式 + 支持的语言：action = recurse（以 compat 包名引入新版本）
@@ -537,7 +537,7 @@ def classify_preblocked_dependency(dep: dict[str, Any], lang: str) -> dict[str, 
     found_version = dep.get("found_version", "")
     requirement = dep.get("requirement", "")
 
-    # 官方版本比要求版本更新且同主版本时，直接 reuse（requirements.txt == 精确锁版的误判修正）
+    # 社区版本比要求版本更新且同主版本时，直接 reuse（requirements.txt == 精确锁版的误判修正）
     import re as _re
     req_ver_m = _re.search(r"[\d][0-9A-Za-z.+_~\-]*", requirement or "")
     req_ver_only = req_ver_m.group(0) if req_ver_m else ""
@@ -563,20 +563,20 @@ def classify_preblocked_dependency(dep: dict[str, Any], lang: str) -> dict[str, 
                 "existing_check": {
                     "official": official_info,
                     "decision": "reuse_official",
-                    "reason": f"官方源版本 {found_version} 与要求版本 {req_ver_only} 同主版本且更新，直接复用",
+                    "reason": f"社区源版本 {found_version} 与要求版本 {req_ver_only} 同主版本且更新，直接复用",
                 },
                 "decision": "reuse_official",
                 "action": "resolved",
-                "reason": f"官方源版本 {found_version} 与要求版本 {req_ver_only} 同主版本且更新，直接复用",
+                "reason": f"社区源版本 {found_version} 与要求版本 {req_ver_only} 同主版本且更新，直接复用",
             }
 
     reason_base = (
-        f"官方仓库已存在同名包，但最高版本 {found_version or '未知版本'} "
+        f"社区仓库已存在同名包，但最高版本 {found_version or '未知版本'} "
         f"不满足要求（{requirement or '无版本约束'}），需人工决策"
     )
 
     conflict_mode = _dep_conflict_mode()
-    _COMPAT_SUPPORTED_LANGS = {"nodejs", "c", "cpp", "java", "ruby"}
+    _COMPAT_SUPPORTED_LANGS = {"c", "cpp", "java"}
     can_compat = (
         (conflict_mode == "compat" and lang in _COMPAT_SUPPORTED_LANGS)
         or conflict_mode == "force_compat"
@@ -680,7 +680,7 @@ def classify_dependency(dep: dict[str, Any], lang: str, source_index: dict[tuple
         reason = existing_check["reason"]
     elif decision == "block_official_older":
         conflict_mode = _dep_conflict_mode()
-        _COMPAT_SUPPORTED_LANGS = {"nodejs", "c", "cpp", "java", "ruby"}
+        _COMPAT_SUPPORTED_LANGS = {"c", "cpp", "java"}
         can_compat = (
             (conflict_mode == "compat" and lang in _COMPAT_SUPPORTED_LANGS)
             or conflict_mode == "force_compat"
@@ -778,6 +778,54 @@ def main():
 
     out_file = make_output_path(args.pkgname, args.output)
     analysis_path = make_analysis_path(out_file, args.pkgname)
+
+    # ── vendor 语言早退：Go/Rust 永远 vendor，跳过语言级依赖存在性检查 ──────────
+    # 构建环境离线，这两种语言没有"不 vendor"的场景。
+    # 系统库依赖（CGO、-sys crate）由 rpmbuild 循环兜底（报 missing header → 补 BuildRequires）。
+    VENDOR_LANGS = {"go", "rust"}
+    if lang in VENDOR_LANGS:
+        output_path = Path(out_file)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        summary = build_summary(args.pkgname, lang, args.source_dir, "", [])
+        summary["vendor_mode"] = True
+        output_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[pre_check] {lang} vendor 模式，跳过语言级依赖检查", file=sys.stderr)
+        sys.exit(0)
+
+    # ── Node.js vendor 阈值判断：依赖多时自动切换 vendor 模式 ────────────────────
+    # 先做纯静态分析（不查 RPM 源），用 package.json dependencies 总数作为上界。
+    # 大部分 npm 包不在 openEuler 社区源，依赖多意味着 missing 也多，vendor 更经济。
+    NODEJS_VENDOR_THRESHOLD = 10
+    if lang == "nodejs":
+        static_cmd = [resolve_python_executable(), str(script), args.source_dir, "-o", str(analysis_path)]
+        static_cmd += ["--container", args.container]
+        subprocess.run(static_cmd, capture_output=False)
+        try:
+            static_result = load_json(analysis_path)
+        except Exception:
+            static_result = {}
+
+        # dependencies 总数是 missing 的保守上界（不需要查 RPM 源）
+        deps_count = len(static_result.get("dependencies", {}))
+        source_path = Path(args.source_dir)
+        has_lockfile = (source_path / "package-lock.json").exists() or (source_path / "yarn.lock").exists()
+
+        if deps_count > NODEJS_VENDOR_THRESHOLD:
+            output_path = Path(out_file)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            if not has_lockfile:
+                print(f"[pre_check] nodejs: {deps_count} 个依赖 > 阈值 {NODEJS_VENDOR_THRESHOLD} 但无 lockfile，无法确定性 vendor", file=sys.stderr)
+                summary = build_summary(args.pkgname, lang, args.source_dir, str(analysis_path), [])
+                summary["blocked"] = [{"name": args.pkgname, "reason": f"{deps_count} npm deps declared but no lockfile (package-lock.json/yarn.lock), cannot vendor deterministically"}]
+                output_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+                sys.exit(1)
+            print(f"[pre_check] nodejs: {deps_count} 个依赖 > 阈值 {NODEJS_VENDOR_THRESHOLD}，切换 vendor 模式", file=sys.stderr)
+            summary = build_summary(args.pkgname, lang, args.source_dir, str(analysis_path), [])
+            summary["vendor_mode"] = True
+            output_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+            sys.exit(0)
+        # deps <= THRESHOLD → 走原有 --check-rpm 路径（查实际 missing 数量）
+        print(f"[pre_check] nodejs: {deps_count} 个依赖 <= 阈值 {NODEJS_VENDOR_THRESHOLD}，走 RPM-native 路径", file=sys.stderr)
 
     cmd = [resolve_python_executable(), str(script), args.source_dir, "--check-rpm", "-o", str(analysis_path)]
     if lang == "python":

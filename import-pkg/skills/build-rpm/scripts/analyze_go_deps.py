@@ -8,7 +8,7 @@ Go 包 RPM 依赖分析脚本
     1. go.mod 中声明的 Go 版本 → BuildRequires: golang >= x.y
     2. CGO 使用情况 → 需要 gcc + 具体 C 库的 -devel RPM
 
-  C 库依赖通过在 OpenEuler 容器内执行一次共享批量查询，
+  C 库依赖通过在 openEuler 容器内执行一次共享批量查询，
   不依赖静态映射表，覆盖率更高。
 
 用法：
@@ -287,7 +287,7 @@ def main():
     parser.add_argument("--check-rpm", action="store_true",
                         help="在容器内查询 RPM 可用性（需要 Docker）")
     parser.add_argument("--container", default="oe-build-env",
-                        help="已运行的 OpenEuler 容器名（配合 --check-rpm 使用）")
+                        help="已运行的 openEuler 容器名（配合 --check-rpm 使用）")
     parser.add_argument("-o", "--output", default="",
                         help="结果输出到 JSON 文件")
     args = parser.parse_args()

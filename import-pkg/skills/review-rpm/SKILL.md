@@ -96,7 +96,7 @@ allowed-tools:
 
 - Source0 URL 完全不可达（需人工提供正确 URL）
 - License 合规问题（非技术问题）
-- 需要添加全新 BuildRequires 且对应包在官方源不存在（超出 spec 可修复范围）
+- 需要添加全新 BuildRequires 且对应包在社区源不存在（超出 spec 可修复范围）
 
 ### 输出
 

@@ -406,19 +406,37 @@ def parse_local_deps(source_dir: str) -> Tuple[List[str], str]:
                     backend = name
                     break
 
-            return deps, backend
+            # 只有 [project] 节存在且有 dependencies 时才提前返回；
+            # 否则继续尝试 setup.py（如 skypilot：pyproject.toml 只含 build-system/tool，
+            # 依赖全在 setup.py 里）
+            if deps or "project" in data:
+                return deps, backend
 
     # setup.py 兜底
     setup_py = src / "setup.py"
     if setup_py.exists():
         content = setup_py.read_text(errors="ignore")
         requires = []
-        m = re.search(r"install_requires\s*=\s*[\[\(](.*?)[\]\)]", content, re.DOTALL)
-        if m:
-            for dep in re.findall(r"""['"]([^'"]+)['"]""", m.group(1)):
-                dep = dep.strip()
-                if dep:
-                    requires.append(dep)
+        # 用括号深度匹配，避免 ray[default] 这类带 extras 的依赖里的 ] 触发非贪婪提前终止
+        start = content.find("install_requires")
+        if start != -1:
+            bracket_start = content.find("[", start)
+            if bracket_start != -1:
+                depth = 0
+                end_pos = bracket_start
+                for i, c in enumerate(content[bracket_start:]):
+                    if c == "[":
+                        depth += 1
+                    elif c == "]":
+                        depth -= 1
+                        if depth == 0:
+                            end_pos = bracket_start + i
+                            break
+                inner = content[bracket_start + 1:end_pos]
+                for dep in re.findall(r"""['"]([^'"]+)['"]""", inner):
+                    dep = dep.strip()
+                    if dep:
+                        requires.append(dep)
         if requires:
             backend = "flit" if "flit" in content else ("poetry" if "poetry" in content else "setuptools")
             return requires, backend
@@ -632,7 +650,7 @@ def check_rpm_availability(container: str, requires: List[str], pypi_metadata: O
     批量查询依赖的 RPM 可用性，返回 available / missing / version_conflict 列表。
     通过 python3dist() 官方 Provides 机制查询，不依赖包名前缀猜测。
 
-    version_conflict: 官方源有该包但版本不满足约束，携带 found_version 字段，
+    version_conflict: 社区源有该包但版本不满足约束，携带 found_version 字段，
                       供 pre_check_deps 直接生成 blocked 而无需二次查询。
     """
     tasks = build_lookup_tasks(requires, pypi_metadata)
@@ -827,7 +845,7 @@ def main():
     parser.add_argument("--check-rpm", action="store_true",
                         help="在容器内用 dnf 查询 RPM 可用性")
     parser.add_argument("--container", default="oe-build-env",
-                        help="已运行的 OpenEuler 容器名（默认 oe-build-env）")
+                        help="已运行的 openEuler 容器名（默认 oe-build-env）")
     parser.add_argument("-o", "--output", default="",
                         help="结果输出到 JSON 文件")
     args = parser.parse_args()

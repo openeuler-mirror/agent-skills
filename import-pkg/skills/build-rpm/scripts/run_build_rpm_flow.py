@@ -21,6 +21,10 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 PRE_CHECK_SCRIPT = SCRIPTS_DIR / "pre_check_deps.py"
 PREPARE_BUILD_INPUTS_SCRIPT = SCRIPTS_DIR / "prepare_build_inputs.py"
 
+# run_ci_check.py 在 pkg-introduce/scripts/ 下
+PKG_INTRODUCE_SCRIPTS = SCRIPTS_DIR.parents[2] / "pkg-introduce" / "scripts"
+CI_CHECK_SCRIPT = PKG_INTRODUCE_SCRIPTS / "run_ci_check.py"
+
 
 class FlowError(RuntimeError):
     def __init__(self, reason: str, failure_type: str = ""):
@@ -245,6 +249,7 @@ def main() -> int:
     parser.add_argument("--install", action="store_true")
     parser.add_argument("--depth", type=int, default=0)
     parser.add_argument("--container", default="oe-build-env")
+    parser.add_argument("--repo-local", default="", help="归档仓本地路径，用于 CI 验证")
     parser.add_argument("--source-dir", default="")
     parser.add_argument("--spec", default="", help="Existing spec file path")
     parser.add_argument("--build-state-dir", default="./build_state")
@@ -352,7 +357,8 @@ def main() -> int:
                 print(json.dumps(payload, ensure_ascii=False, indent=2))
                 return 1
 
-            if pending:
+            vendor_mode = precheck.get("vendor_mode", False)
+            if pending and not vendor_mode:
                 payload = build_result_payload(
                     pkgname=args.pkgname, lang=args.lang, version=args.version,
                     requested_version=args.version, depth=args.depth,
@@ -478,7 +484,8 @@ def main() -> int:
             "blocked_count": precheck_summary["blocked_count"],
         }
 
-        if pending:
+        vendor_mode = precheck.get("vendor_mode", False)
+        if pending and not vendor_mode:
             # Dependency recursion is owned by build-rpm skill, not this script.
             # Return rc=2 with structured payload so skill can run /pkg-introduce per dep.
             payload = build_result_payload(
@@ -626,6 +633,38 @@ def main() -> int:
                     print(json.dumps(payload, ensure_ascii=False, indent=2))
                     return 1
                 build_state["install_passed"] = True
+
+        # CI 验证（仅在有 repo_local 时执行；无 repo_local 视为跳过）
+        if args.repo_local and CI_CHECK_SCRIPT.exists():
+            ci_proc = subprocess.run(
+                [sys.executable, str(CI_CHECK_SCRIPT),
+                 "--pkgs", args.pkgname,
+                 "--container", args.container,
+                 "--repo-local", args.repo_local,
+                 "--reports-dir", str(reports_dir.parent / "pkgs" / args.pkgname)],
+                capture_output=True, text=True,
+            )
+            build_state["ci_passed"] = ci_proc.returncode == 0
+            if ci_proc.returncode != 0:
+                payload = build_result_payload(
+                    pkgname=args.pkgname,
+                    lang=args.lang,
+                    version=args.version,
+                    requested_version=args.version,
+                    depth=args.depth,
+                    status="ci_failed",
+                    action="blocked",
+                    reason="CI check failed",
+                    precheck_summary=precheck_summary,
+                    dependency_resolution=recursion_payload,
+                    artifacts=artifacts,
+                    failure_type="non_retryable_build_failure",
+                    failure_reason=ci_proc.stdout + ci_proc.stderr,
+                    build=build_state,
+                )
+                write_json(output_path, payload)
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+                return 1
 
         payload = build_result_payload(
             pkgname=args.pkgname,

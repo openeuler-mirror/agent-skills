@@ -45,7 +45,7 @@
 
 | 检查项 | 结果 |
 |--------|------|
-| OpenEuler 官方源（OS / EPOL / everything / update）是否已有 | 有 / **无** |
+| openEuler 社区源（OS / EPOL / everything / update）是否已有 | 有 / **无** |
 | 用户 RPM 仓库是否已有 | 有 / **无** |
 | 引入决策 | introduce_new / upgrade_user_repo / reuse_* |
 
@@ -139,7 +139,7 @@
 <spec 中的 BuildRequires 列表>
 ```
 
-> 若 BuildRequires 中有非官方源依赖，说明来源（用户 RPM 仓库 / 本次同批引入）。
+> 若 BuildRequires 中有非社区源依赖，说明来源（用户 RPM 仓库 / 本次同批引入）。
 
 ### 4.4 对外提供（Provides）
 
@@ -199,7 +199,7 @@
 | `<pkgname>-devel-<version>-1.noarch.rpm` | N KB/MB | noarch / x86_64 |
 | `<pkgname>-<version>-1.src.rpm` | N MB | src |
 
-构建环境：容器 `oe-build-env`（OpenEuler），`rpmbuild -ba`
+构建环境：容器 `oe-build-env`（openEuler），`rpmbuild -ba`
 
 ### 6.2 安装文件清单
 

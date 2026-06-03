@@ -71,7 +71,7 @@ def main() -> int:
     session["repo_local"] = str(local_dir)
     session_path.write_text(json.dumps(session, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(json.dumps({"status": "done", "repo_local": str(local_dir)}, ensure_ascii=False))
+    print(f"REPO_LOCAL={local_dir}", flush=True)
     return 0
 
 

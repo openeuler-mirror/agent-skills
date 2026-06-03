@@ -441,11 +441,11 @@ def check_license(source_dir: str) -> dict:
     license_str = " / ".join(spdx_ids)
 
     if worst == "no_commercial":
-        msg = f"{license_str} 限制商用，不符合 OpenEuler 开源要求，阻断"
+        msg = f"{license_str} 限制商用，不符合 openEuler 开源要求，阻断"
     elif worst == "unknown":
         msg = f"{license_str} 规则脚本无法识别，需要 AI 兜底判断并给出可解释结论后方可继续"
     elif worst == "strong_copyleft":
-        msg = f"{license_str} 为强 Copyleft 许可证，OpenEuler 可分发，spec License 字段需正确填写"
+        msg = f"{license_str} 为强 Copyleft 许可证，openEuler 可分发，spec License 字段需正确填写"
     elif worst == "weak_copyleft":
         msg = f"{license_str} 为弱 Copyleft 许可证，动态链接场景兼容，通过"
     else:

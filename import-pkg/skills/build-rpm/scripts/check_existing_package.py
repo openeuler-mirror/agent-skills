@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""检查目标包在 OpenEuler 官方源和 AI 源中的复用/升级决策。
+"""检查目标包在 openEuler 社区源和 AI 源中的复用/升级决策。
 
-官方源与 AI 源均通过构建容器内的 DNF 软件源视角查询；
+社区源与 AI 源均通过构建容器内的 DNF 软件源视角查询；
 AI 源仓库地址来自 `archive-rpm-sources/config.json` 的 remote_url。
 不再依赖本地克隆目录扫描来判断 user_repo 是否存在。
 """
@@ -559,7 +559,7 @@ def build_reason(
     requested_desc = requirement or requested_version or "无版本约束"
     if decision == "reuse_official":
         version = (official.get("highest") or {}).get("version") or "已存在"
-        return f"官方仓库已有满足要求（{requested_desc}）的版本：{version}"
+        return f"社区仓库已有满足要求（{requested_desc}）的版本：{version}"
     if decision == "reuse_user_repo":
         version = (user_repo.get("highest") or {}).get("version") or "已存在"
         return f"用户仓库已有满足要求（{requested_desc}）的版本：{version}"
@@ -568,10 +568,10 @@ def build_reason(
         return f"用户仓库已存在同名包，但最高版本 {version} 不满足要求（{requested_desc}）"
     if decision == "block_official_older":
         version = (official.get("highest") or {}).get("version") or "未知版本"
-        return f"官方仓库已存在同名包，但最高版本 {version} 不满足要求（{requested_desc}），需人工决策"
+        return f"社区仓库已存在同名包，但最高版本 {version} 不满足要求（{requested_desc}），需人工决策"
     if official.get("comparison_unknown") or user_repo.get("comparison_unknown"):
         return f"存在同名包，但版本约束无法可靠解析（{requested_desc}），保守继续引入流程"
-    return f"官方仓库和用户仓库均无满足要求（{requested_desc}）的包"
+    return f"社区仓库和用户仓库均无满足要求（{requested_desc}）的包"
 
 
 def choose_decision(
@@ -585,7 +585,7 @@ def choose_decision(
     if user_repo["meets_need"]:
         return "reuse_user_repo"
 
-    # 官方源版本与要求版本同主版本且更新时，视为可复用
+    # 社区源版本与要求版本同主版本且更新时，视为可复用
     # 大版本跳跃（major 不同）可能有 breaking change，不自动 reuse
     if official["exists"] and not official.get("comparison_unknown"):
         official_highest = (official.get("highest") or {}).get("version", "")
@@ -718,7 +718,7 @@ def print_summary(result: dict[str, Any]) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="检查包在官方仓库和用户 RPM 仓库中的版本感知决策")
+    parser = argparse.ArgumentParser(description="检查包在社区仓库和用户 RPM 仓库中的版本感知决策")
     parser.add_argument("pkgname", help="待检查的包名")
     parser.add_argument("--version", default="", help="本次待引入的解析后版本")
     parser.add_argument("--requirement", default="", help="依赖版本约束，例如 '>= 2.1' 或 '== 1.0'")

@@ -14,7 +14,7 @@ if [ ! -d "./sources/<pkgname>/dist" ] && \
    [ ! -d "./sources/<pkgname>/lib" ] && \
    [ ! -d "./sources/<pkgname>/build" ]; then
   echo "[BLOCK] 源码目录中不存在 dist/、lib/ 或 build/ 编译产物目录"
-  echo "        原因：openEuler 官方源没有 TypeScript / esbuild 等构建工具链，"
+  echo "        原因：openEuler 社区源没有 TypeScript / esbuild 等构建工具链，"
   echo "              无法在 %build 阶段完成编译。"
   echo "        解决：改用 npm registry tarball（已包含预编译产物）作为 Source0"
   exit 1
@@ -230,11 +230,11 @@ Node.js 的依赖管理与 Go/Rust 不同，**不默认 vendor node_modules**。
 
 ### 11.1 优先路径：RPM 层面声明 Requires
 
-官方源已有对应 `nodejs-<dep>` 包时，直接写 `Requires: nodejs-<dep>`，运行时由 RPM 解析器从 `/usr/share/nodejs/<dep>` 查找。这是 openEuler Node.js 打包的**标准路径**。
+社区源已有对应 `nodejs-<dep>` 包时，直接写 `Requires: nodejs-<dep>`，运行时由 RPM 解析器从 `/usr/share/nodejs/<dep>` 查找。这是 openEuler Node.js 打包的**标准路径**。
 
 ### 11.2 次选路径：递归引入依赖包
 
-官方源没有、但依赖包本身值得单独引入时，走 dep_check_needed_batch 流程，先引入依赖包，再引入主包。适用于：
+社区源没有、但依赖包本身值得单独引入时，走 dep_check_needed_batch 流程，先引入依赖包，再引入主包。适用于：
 - 被多个包共享的通用库
 - 有独立维护价值的包
 
@@ -245,9 +245,9 @@ Node.js 的依赖管理与 Go/Rust 不同，**不默认 vendor node_modules**。
 | 适用条件 | 说明 |
 |---------|------|
 | 依赖仅被该包内部使用，无其他 RPM 依赖 | 单独引入成本高于收益 |
-| 依赖是私有 fork 或 patch 版本 | 无法直接复用官方源包 |
+| 依赖是私有 fork 或 patch 版本 | 无法直接复用社区源包 |
 | 依赖是极小的工具函数（< 50 行） | 无必要单独打包 |
-| 依赖在 npm 上已废弃/归档，但上游仍在使用 | 无法从官方源获取 |
+| 依赖在 npm 上已废弃/归档，但上游仍在使用 | 无法从社区源获取 |
 
 **Bundled deps 的 spec 写法：**
 
@@ -292,7 +292,7 @@ deps = {**pkg.get('dependencies', {}), **pkg.get('devDependencies', {})}
 ### 11.4 决策流程
 
 ```
-依赖包 <dep> 在官方源是否存在 nodejs-<dep>?
+依赖包 <dep> 在社区源是否存在 nodejs-<dep>?
   ├── 是 → Requires: nodejs-<dep>（标准路径）
   └── 否 → 是否被多个包共用 或 有独立维护价值?
               ├── 是 → dep_check_needed_batch，递归引入（次选路径）
