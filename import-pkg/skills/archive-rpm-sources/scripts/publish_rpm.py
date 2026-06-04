@@ -424,7 +424,6 @@ _RUNTIME_INDICATORS = {
     "python": ["python3_sitelib", "python_sitelib", "python3_sitearch",
                "%py3_install", "python3dist("],
     "java":   ["%{_javadir}", "%{_mavenpomdir}", "%mvn_", "mvn_install"],
-    "ruby":   ["%{gem_dir}", "gem install", "rubygems", "%gem_install"],
     "nodejs": ["%{nodejs_sitelib}", "npm install", "node_modules"],
     "perl":   ["%{perl_vendorlib}", "%{perl_vendorarch}", "perl(", "Perl_vendorlib"],
     "lua":    ["%{lua_pkgdir}", "lua_version", "%luarocks_install"],
@@ -434,7 +433,6 @@ _RUNTIME_INDICATORS = {
 _NAME_PREFIX_MAP = {
     "python3-": "python", "python-": "python",
     "java-": "java", "maven-": "java",
-    "rubygem-": "ruby",
     "nodejs-": "nodejs", "npm-": "nodejs",
     "perl-": "perl",
     "lua-": "lua",
@@ -445,7 +443,7 @@ _NAME_PREFIX_MAP = {
 _NO_COMPAT_TYPES = {"python", "nodejs", "perl", "lua", "php"}
 
 # 安装路径含版本号（gem 目录、jar 文件名），有机会 compat，尝试 rpmrebuild
-_TRY_COMPAT_TYPES = {"java", "ruby"}
+_TRY_COMPAT_TYPES = {"java"}
 
 
 def detect_package_type(pkg_name: str, repo_dir: str) -> str:
@@ -535,7 +533,7 @@ def create_compat_via_rpmrebuild(
         capture_output=True
     )
     if inst.returncode != 0:
-        # rpmrebuild 可能不在官方源里，尝试直接检查是否已安装
+        # rpmrebuild 可能不在社区源里，尝试直接检查是否已安装
         check = subprocess.run(
             ["docker", "exec", container, "which", "rpmrebuild"],
             capture_output=True
@@ -727,7 +725,7 @@ def resolve_dist_conflicts(
                     f"\n[{pkg_name}] compat 包创建失败，已回滚（保留旧版本 "
                     f"{existing_info['version']}）。\n\n"
                     f"  可能原因：\n"
-                    f"  - rpmrebuild 未安装或不在 OpenEuler 源中\n"
+                    f"  - rpmrebuild 未安装或不在 openEuler 源中\n"
                     f"  - spec 中有复杂宏依赖，rpmrebuild 无法处理\n\n"
                     f"  解决方案：\n"
                     f"  1. 手动在容器内安装 rpmrebuild 后重试\n"
@@ -901,7 +899,7 @@ def ensure_repo_file(dist_dir: Path, raw_base_url: str):
     repo_file = dist_dir / "repo-aitest.repo"
     content = (
         f"[repo-aitest]\n"
-        f"name=OpenEuler RPM Repository\n"
+        f"name=openEuler RPM Repository\n"
         f"baseurl={raw_base_url}/dist\n"
         f"enabled=1\n"
         f"gpgcheck=0\n"
@@ -919,7 +917,7 @@ def ensure_readme(repo_dir: str, remote_url: str):
     raw_base = clean_url.replace(
         "https://github.com/", "https://raw.githubusercontent.com/"
     ).removesuffix(".git")
-    readme.write_text(f"""# OpenEuler RPM 仓库
+    readme.write_text(f"""# openEuler RPM 仓库
 
 ## 目录结构
 

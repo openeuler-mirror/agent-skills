@@ -304,21 +304,20 @@ def detect_lang_and_version(source_dir: Path, expected_version: str) -> dict[str
     return {"status": "done", "lang": lang, "version": version}
 
 
-def run_existing_check(pkgname: str, version: str, lang: str, reports_dir: Path, container: str) -> dict[str, Any]:
+def run_existing_check(pkgname: str, version: str, lang: str, reports_dir: Path, container: str, constraint: str = "") -> dict[str, Any]:
     path = reports_dir / f"existing_check_{pkgname}.json"
-    proc = run_command([
+    cmd = [
         sys.executable,
         str(CHECK_EXISTING_SCRIPT),
         pkgname,
-        "--version",
-        version,
-        "--lang",
-        lang,
-        "--container",
-        container,
-        "-o",
-        str(path),
-    ])
+        "--version", version,
+        "--lang", lang,
+        "--container", container,
+        "-o", str(path),
+    ]
+    if constraint:
+        cmd += ["--requirement", constraint]
+    proc = run_command(cmd)
     if proc.returncode != 0:
         mark_step(pkgname, reports_dir, "existing_check", "failed")
         raise FlowError(proc.stderr.strip() or proc.stdout.strip() or "existing check failed")

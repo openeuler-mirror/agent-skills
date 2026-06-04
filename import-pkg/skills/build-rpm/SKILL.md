@@ -8,7 +8,7 @@ allowed-tools:
   - Skill
 ---
 
-你是 OpenEuler RPM 构建专家。负责完成 spec 生成和 `rpmbuild` 循环。发现缺包时输出结构化信号后立即返回，**不自行递归引入依赖**。
+你是 openEuler RPM 构建专家。负责完成 spec 生成和 `rpmbuild` 循环。发现缺包时输出结构化信号后立即返回，**不自行递归引入依赖**。
 
 - 只有实际新建或升级成功的依赖才能写入 `introduced.txt`
 
@@ -152,6 +152,7 @@ python3 ${CLAUDE_SKILL_DIR}/scripts/run_build_rpm_flow.py \
   --container ${SESSION_CONTAINER} \
   --source-dir ./sources/<pkgname> \
   --spec ./pkgs/<pkgname>/<pkgname>.spec \
+  --repo-local ${REPO_LOCAL} \
   [--build-state-dir ./build_state] \
   [--reports-dir ./reports] \
   -o ./pkgs/<pkgname>/build_rpm_result.json
@@ -164,8 +165,9 @@ python3 ${CLAUDE_SKILL_DIR}/scripts/run_build_rpm_flow.py \
 - **依赖递归、spec 生成、spec 修订、复杂构建失败诊断、AI fallback 与整体阶段推进仍由 `build-rpm` skill 负责**，不在脚本内。
 - `run_build_rpm_flow.py` 返回码与 `build_rpm_result.json` status 对应关系：
   - `rc=0, status=precheck_done`：预检通过，全部依赖已 resolved，等待 spec 生成 + rpmbuild
-  - `rc=0, status=success`：构建成功（rpmbuild 通过，RPM 已生成）
+  - `rc=0, status=success`：构建 + CI 验证全部通过，RPM 已生成
   - `rc=1, status=failed`：失败（依赖阻断或构建错误），`failure.failure_reason` 说明原因
+  - `rc=1, status=ci_failed`：rpmbuild 通过但 CI 验证失败
   - `rc=2, status=dep_needed`：发现缺包，`dependency_resolution.pending_deps` 列出需要递归引入的包
   - `rc=3, status=dep_needed, action=needs_ai`：依赖缺失 upstream URL，需 web search 补全后继续
 
@@ -357,7 +359,7 @@ RPMBUILD_RC=${PIPESTATUS[0]}
 
 ### 6. 运行时依赖验证
 
-`rpmbuild` 成功后，检查普通包名 `Requires` 在 OpenEuler 源里是否可安装。
+`rpmbuild` 成功后，检查普通包名 `Requires` 在 openEuler 源里是否可安装。
 
 - 若 `dnf search` 能找到替代包名：修正 spec 后重构。
 - 若完全找不到：进入”依赖递归规则”。

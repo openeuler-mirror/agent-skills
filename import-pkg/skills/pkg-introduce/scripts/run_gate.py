@@ -86,9 +86,9 @@ def _run_setup_env(report: dict, source_dir: Path, lang: str, container: str, mo
 
 
 def _run_existing_check(report: dict, pkgname: str, version: str, lang: str,
-                        reports_dir: Path, container: str) -> str:
+                        reports_dir: Path, container: str, constraint: str = "") -> str:
     try:
-        result = run_existing_check(pkgname, version, lang, reports_dir, container)
+        result = run_existing_check(pkgname, version, lang, reports_dir, container, constraint=constraint)
         decision = result.get("decision", "")
         report["steps"]["existing_check"] = {
             "status": "done",
@@ -160,7 +160,7 @@ def run_gate(args: argparse.Namespace) -> int:
 
         # ── existing_check ────────────────────────────────────────────────
         if not _already_done(steps["existing_check"]):
-            decision = _run_existing_check(report, args.pkg, version, lang, reports_dir, container)
+            decision = _run_existing_check(report, args.pkg, version, lang, reports_dir, container, args.constraint)
             _save(report, gate_report_path)
 
     except FlowError:
@@ -191,6 +191,7 @@ def main() -> int:
     parser.add_argument("--url", required=True, dest="upstream_url")
     parser.add_argument("--lang", default="", help="Language (read from check_result if omitted)")
     parser.add_argument("--version", default="", help="Version (read from check_result if omitted)")
+    parser.add_argument("--constraint", default="", help="版本约束（如 >=1.0,<2.0），传给 existing_check 做 reuse 判断")
     parser.add_argument("--source-dir", default="", dest="source_dir",
                         help="Source dir (read from check_result if omitted)")
     parser.add_argument("--mode", default="top-level", choices=["top-level", "dependency"])

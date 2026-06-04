@@ -33,7 +33,7 @@ def exec_cmd(container: str, cmd: str, workdir: str) -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="在 OpenEuler 容器内执行命令")
+    parser = argparse.ArgumentParser(description="在 openEuler 容器内执行命令")
     parser.add_argument("cmd", help="要执行的 shell 命令")
     parser.add_argument("--container", default=DEFAULT_CONTAINER)
     parser.add_argument("--workdir", default=DEFAULT_WORKDIR)

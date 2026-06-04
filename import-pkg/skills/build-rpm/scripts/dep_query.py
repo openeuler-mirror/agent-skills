@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """统一依赖查询入口。
 
-所有"查官方源/用户源某包是否满足约束"的操作统一走 query_repo_for_dep()，
+所有"查社区源/用户源某包是否满足约束"的操作统一走 query_repo_for_dep()，
 返回三态结果：ok / too_low / not_exist。
 
 内部复用 rpm_batch_lookup，按语言选择最合适的查询策略：
@@ -190,7 +190,7 @@ def query_both_repos(
     official_repo_ids: list[str],
     user_repo_id: str = "repo-aitest",
 ) -> tuple[RepoQueryResult, RepoQueryResult]:
-    """同时查询官方源和用户源，返回 (official_result, user_result)。"""
+    """同时查询社区源和用户源，返回 (official_result, user_result)。"""
     official = query_repo_for_dep(dep_name, lang, requirement, container, enabled_repos=official_repo_ids)
     user = query_repo_for_dep(dep_name, lang, requirement, container, enabled_repos=[user_repo_id])
     return official, user

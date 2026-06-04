@@ -263,7 +263,7 @@ def check_runtime_deps(container: str, dependencies: Dict[str, str]) -> Dict:
     """
     检查 package.json dependencies 在容器内是否有对应 RPM，并校验版本约束。
     返回 available / missing / version_conflict 三态列表。
-    version_conflict: 官方源有该包但版本不满足约束，携带 found_version。
+    version_conflict: 社区源有该包但版本不满足约束，携带 found_version。
     """
     if not dependencies:
         return {"available": [], "missing": [], "version_conflict": []}
@@ -409,7 +409,7 @@ def main():
     parser = argparse.ArgumentParser(description="Node.js 包 RPM 依赖分析")
     parser.add_argument("source_dir", help="Node.js 项目源码目录")
     parser.add_argument("--check-rpm", action="store_true", help="在容器内查询 RPM 可用性")
-    parser.add_argument("--container", default="oe-build-env", help="OpenEuler 容器名")
+    parser.add_argument("--container", default="oe-build-env", help="openEuler 容器名")
     parser.add_argument("-o", "--output", default="", help="结果输出到 JSON 文件")
     args = parser.parse_args()
 

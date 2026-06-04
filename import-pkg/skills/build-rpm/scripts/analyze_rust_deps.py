@@ -264,7 +264,7 @@ def main():
     parser = argparse.ArgumentParser(description="Rust 包 RPM 依赖分析")
     parser.add_argument("source_dir", help="Rust 项目源码目录")
     parser.add_argument("--check-rpm", action="store_true", help="在容器内查询 RPM 可用性")
-    parser.add_argument("--container", default="oe-build-env", help="OpenEuler 容器名")
+    parser.add_argument("--container", default="oe-build-env", help="openEuler 容器名")
     parser.add_argument("-o", "--output", default="", help="结果输出到 JSON 文件")
     args = parser.parse_args()
 

@@ -40,7 +40,7 @@ Gradle 项目在构建时需要：
 - 不允许使用预构建 jar 包
 
 建议：
-1. 等待 openEuler 官方仓库收录（如有 MIT/Apache 许可证，可提交收录申请）
+1. 等待 openEuler 社区仓库收录（如有 MIT/Apache 许可证，可提交收录申请）
 2. 先将所有 Gradle 插件依赖逐一打包引入，再重新发起引入
 3. 检查上游是否提供 Maven 构建路径（部分项目同时维护 pom.xml）
 ```
