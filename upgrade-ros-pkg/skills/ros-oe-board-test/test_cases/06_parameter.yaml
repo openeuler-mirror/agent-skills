@@ -1,0 +1,74 @@
+# ROS2 参数管理测试
+# 验证ROS2参数的声明、获取、设置功能
+
+name: "参数管理测试"
+description: "验证ROS2参数的声明、获取、设置功能"
+version: "1.0"
+category: "parameter"
+priority: 4
+depends_on:
+  - "environment"
+  - "package"
+  - "node"
+
+test_cases:
+  - id: "param_001"
+    name: "列出节点参数"
+    description: "验证ros2 param list命令正常"
+    priority: "P1"
+    setup:
+      - command: "ros2 run demo_nodes_cpp talker > /dev/null 2>&1"
+        background: true
+        wait: 3
+    command: "ros2 param list /talker"
+    expect_contains:
+      - "use_sim_time"
+    cleanup:
+      - command: "pkill -f 'demo_nodes_cpp' 2>/dev/null || true"
+    timeout: 15
+    on_failure:
+      diagnose: "无法列出参数"
+      suggestions:
+        - "检查节点是否正常运行"
+        - "检查参数服务"
+
+  - id: "param_002"
+    name: "获取参数值"
+    description: "验证ros2 param get命令正常"
+    priority: "P1"
+    setup:
+      - command: "ros2 run demo_nodes_cpp talker > /dev/null 2>&1"
+        background: true
+        wait: 3
+    command: "ros2 param get /talker use_sim_time"
+    expect_contains:
+      - "Boolean value"
+      - "False"
+    cleanup:
+      - command: "pkill -f 'demo_nodes_cpp' 2>/dev/null || true"
+    timeout: 15
+    on_failure:
+      diagnose: "无法获取参数值"
+      suggestions:
+        - "检查参数是否存在"
+        - "检查参数服务响应"
+
+  - id: "param_003"
+    name: "设置参数值"
+    description: "验证ros2 param set命令正常"
+    priority: "P2"
+    setup:
+      - command: "ros2 run demo_nodes_cpp talker > /dev/null 2>&1"
+        background: true
+        wait: 3
+    command: "ros2 param set /talker use_sim_time true 2>/dev/null && echo 'SET_OK' || echo 'SET_FAILED'"
+    expect_contains:
+      - "SET_OK"
+    cleanup:
+      - command: "pkill -f 'demo_nodes_cpp' 2>/dev/null || true"
+    timeout: 15
+    on_failure:
+      diagnose: "无法设置参数值"
+      suggestions:
+        - "检查参数是否可写"
+        - "检查参数类型匹配"

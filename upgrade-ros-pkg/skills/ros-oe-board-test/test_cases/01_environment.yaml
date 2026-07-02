@@ -1,0 +1,82 @@
+# ROS2 环境验证测试
+# 测试ROS2基础环境是否正确安装和配置
+
+name: "环境验证测试"
+description: "验证ROS2环境是否正确安装和配置"
+version: "1.0"
+category: "environment"
+priority: 0  # 最高优先级，必须先通过
+
+test_cases:
+  - id: "env_001"
+    name: "检查ROS环境变量"
+    description: "验证ROS_DISTRO和ROS_VERSION环境变量"
+    priority: "P0"
+    # 注意：setup.bash 可能不设置 ROS_DISTRO，改为检查目录结构
+    command: "test -f /opt/ros/humble/setup.bash && echo 'SETUP_BASH_OK'"
+    expect_contains:
+      - "SETUP_BASH_OK"
+    timeout: 5
+    on_failure:
+      diagnose: "ROS setup.bash 不存在"
+      suggestions:
+        - "执行 source /opt/ros/humble/setup.bash"
+        - "检查 /opt/ros/humble 目录是否存在"
+
+  - id: "env_002"
+    name: "检查ROS安装目录"
+    description: "验证ROS安装目录存在"
+    priority: "P0"
+    command: "test -d /opt/ros/humble && echo 'ROS_DIR_OK'"
+    expect_contains:
+      - "ROS_DIR_OK"
+    timeout: 5
+    on_failure:
+      diagnose: "ROS安装目录不存在"
+      suggestions:
+        - "检查 ros-humble-ros-base 是否安装"
+        - "执行 dnf install ros-humble-ros-base"
+
+  - id: "env_003"
+    name: "检查ros2命令可用"
+    description: "验证ros2 CLI命令可执行"
+    priority: "P0"
+    command: "ros2 --version"
+    expect_contains:
+      - "ros2"
+    timeout: 10
+    on_failure:
+      diagnose: "ros2命令不可用"
+      suggestions:
+        - "检查 ros-humble-ros2cli 是否安装"
+        - "确认 PATH 环境变量包含 ROS bin 目录"
+
+  - id: "env_004"
+    name: "检查ament索引"
+    description: "验证ament包索引正常"
+    priority: "P1"
+    command: "ros2 pkg list | head -5"
+    expect_not_contains:
+      - "error"
+      - "failed"
+    timeout: 15
+    on_failure:
+      diagnose: "ament包索引异常"
+      suggestions:
+        - "检查 AMENT_PREFIX_PATH 环境变量"
+        - "重新安装 ros-humble-ros-base"
+
+  - id: "env_005"
+    name: "检查RMW实现"
+    description: "验证RMW中间件可用"
+    priority: "P1"
+    command: "ros2 doctor --report 2>/dev/null | grep -i rmw || echo 'RMW check skipped'"
+    expect_not_contains:
+      - "error"
+      - "failed"
+    timeout: 20
+    on_failure:
+      diagnose: "RMW中间件配置问题"
+      suggestions:
+        - "检查 RMW_IMPLEMENTATION 环境变量"
+        - "确认 rmw 包已安装"

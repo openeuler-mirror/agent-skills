@@ -1,0 +1,75 @@
+# ROS2 服务通信测试
+# 验证ROS2服务的Request/Response通信功能
+
+name: "服务通信测试"
+description: "验证ROS2服务的Request/Response通信功能"
+version: "1.0"
+category: "service"
+priority: 4
+depends_on:
+  - "environment"
+  - "package"
+  - "node"
+
+test_cases:
+  - id: "srv_001"
+    name: "列出服务列表"
+    description: "验证ros2 service list命令正常"
+    priority: "P1"
+    setup:
+      - command: "ros2 run demo_nodes_cpp talker > /dev/null 2>&1"
+        background: true
+        wait: 3
+    command: "ros2 service list"
+    expect_contains:
+      - "/talker/describe_parameters"
+      - "/talker/get_parameter_types"
+    cleanup:
+      - command: "pkill -f 'demo_nodes_cpp' 2>/dev/null || true"
+    timeout: 15
+    on_failure:
+      diagnose: "无法列出服务"
+      suggestions:
+        - "检查节点是否正常运行"
+        - "检查服务发现机制"
+
+  - id: "srv_002"
+    name: "查询服务类型"
+    description: "验证ros2 service type命令正常"
+    priority: "P1"
+    setup:
+      - command: "ros2 run demo_nodes_cpp talker > /dev/null 2>&1"
+        background: true
+        wait: 3
+    command: "ros2 service type /talker/get_parameters"
+    expect_contains:
+      - "rcl_interfaces/srv/GetParameters"
+    cleanup:
+      - command: "pkill -f 'demo_nodes_cpp' 2>/dev/null || true"
+    timeout: 15
+    on_failure:
+      diagnose: "无法查询服务类型"
+      suggestions:
+        - "检查服务是否存在"
+        - "检查rcl_interfaces包"
+
+  - id: "srv_003"
+    name: "调用参数服务"
+    description: "验证可以通过服务调用获取参数"
+    priority: "P2"
+    setup:
+      - command: "ros2 run demo_nodes_cpp talker > /dev/null 2>&1"
+        background: true
+        wait: 3
+    command: "ros2 service call /talker/get_parameters rcl_interfaces/srv/GetParameters \"{}\" 2>/dev/null | head -5"
+    expect_not_contains:
+      - "error"
+      - "failed"
+    cleanup:
+      - command: "pkill -f 'demo_nodes_cpp' 2>/dev/null || true"
+    timeout: 20
+    on_failure:
+      diagnose: "服务调用失败"
+      suggestions:
+        - "检查服务定义"
+        - "检查请求消息格式"

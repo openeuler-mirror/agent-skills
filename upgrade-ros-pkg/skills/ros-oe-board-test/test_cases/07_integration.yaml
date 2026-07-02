@@ -1,0 +1,347 @@
+# ROS2 集成测试 - 导航栈 (RealSense + RTAB-Map + Nav2)
+#
+# 验证 realsense 相机、RTAB-Map SLAM、Nav2 导航栈的 launch 启动能力。
+# 测试策略：在没有真实硬件的嵌入式开发板上，验证各节点能否正常启动并
+# 运行到特征性状态（如 "No RealSense devices found"、"Managed nodes are active" 等），
+# 以此证明包安装完整、依赖无缺失、二进制可正常执行。
+#
+# 注意事项:
+#   - 嵌入式开发板性能有限，等待时间需要充足（20-30秒）
+#   - launch 进程可能产生大量子进程，cleanup 需要彻底
+#   - test_data/map/ 下的地图文件需要先上传到开发板 /tmp/ros2_test_data/map/
+#   - requires_packages 字段用于条件执行：仅当目标包列表包含所需包时才运行
+#   - expect_not_contains 用于捕获致命错误（OOM、segfault、alloc failure 等）
+
+name: "集成测试 - 导航栈"
+description: "验证 RealSense + RTAB-Map + Nav2 导航栈的 launch 启动"
+version: "2.1"
+category: "integration"
+priority: 5
+depends_on:
+  - "environment"
+  - "package"
+
+# 本测试文件需要的测试数据（由 test_runner 自动上传到开发板）
+test_data:
+  - source: "test_data/map/rtabmap.pgm"
+    target: "/tmp/ros2_test_data/map/rtabmap.pgm"
+  - source: "test_data/map/rtabmap_board.yaml"
+    target: "/tmp/ros2_test_data/map/rtabmap.yaml"
+
+test_cases:
+  # ============================================================
+  # RealSense 相机测试
+  # ============================================================
+  - id: "integ_001"
+    name: "RealSense 相机节点启动"
+    description: >
+      验证 rs_launch.py 能正常启动 realsense2_camera_node。
+      无硬件时预期输出 "No RealSense devices were found"，
+      这恰好证明节点已正常初始化、完成设备枚举并在轮询设备。
+    priority: "P1"
+    requires_packages:
+      - "realsense2-camera"
+    packages_required:
+      - "realsense2-camera"
+      - "ros2launch"
+      - "launch-ros"
+    setup:
+      - command: >
+          ros2 launch realsense2_camera rs_launch.py
+          align_depth.enable:=true
+          enable_sync:=true
+          initial_reset:=true
+          > /tmp/realsense_launch.log 2>&1
+        background: true
+        wait: 25
+    command: "cat /tmp/realsense_launch.log"
+    expect_contains:
+      - "RealSense ROS"
+      - "LibRealSense"
+      - "No RealSense devices were found"
+    expect_not_contains:
+      - "Cannot allocate memory"
+      - "std::bad_alloc"
+      - "Segmentation fault"
+      - "Killed"
+      - "SIGKILL"
+      - "No such file or directory"
+    cleanup:
+      - command: "pkill -9 -f 'realsense2_camera_node' 2>/dev/null || true"
+      - command: "pkill -9 -f 'ros2.launch.*realsense' 2>/dev/null || true"
+      - command: "sleep 2"
+    timeout: 60
+    on_failure:
+      diagnose: "RealSense 节点启动失败"
+      suggestions:
+        - "检查 ros-humble-realsense2-camera 是否安装"
+        - "检查 ros-humble-ros2launch 和 ros-humble-launch-ros 是否安装"
+        - "检查 librealsense2 动态库依赖: ldd /opt/ros/humble/lib/realsense2_camera/realsense2_camera_node"
+        - "查看完整日志: cat /tmp/realsense_launch.log"
+        - "检查系统内存: free -h"
+
+  - id: "integ_002"
+    name: "RealSense 相机节点注册到 ROS 图"
+    description: >
+      验证 RealSense 节点在 ROS 计算图中正确注册为 /camera/camera。
+    priority: "P2"
+    requires_packages:
+      - "realsense2-camera"
+    setup:
+      - command: >
+          ros2 launch realsense2_camera rs_launch.py
+          align_depth.enable:=true
+          enable_sync:=true
+          initial_reset:=true
+          > /dev/null 2>&1
+        background: true
+        wait: 25
+    command: "ros2 node list"
+    expect_contains:
+      - "/camera/camera"
+    cleanup:
+      - command: "pkill -9 -f 'realsense2_camera_node' 2>/dev/null || true"
+      - command: "pkill -9 -f 'ros2.launch.*realsense' 2>/dev/null || true"
+      - command: "sleep 2"
+    timeout: 60
+    on_failure:
+      diagnose: "RealSense 节点未注册到 ROS 图"
+      suggestions:
+        - "增加等待时间（嵌入式设备初始化较慢）"
+        - "检查 DDS 发现机制"
+        - "检查日志是否有内存不足或段错误"
+
+  # ============================================================
+  # RTAB-Map SLAM 测试
+  # ============================================================
+  - id: "integ_003"
+    name: "RTAB-Map SLAM 节点启动"
+    description: >
+      验证 rtabmap.launch.py 能启动 rtabmap (SLAM) 和 rgbd_odometry (里程计) 节点。
+      无传感器输入时节点会持续等待数据，这是正常行为。
+      rtabmap_viz 未安装会报 ERROR 但不影响核心 SLAM 功能。
+    priority: "P1"
+    requires_packages:
+      - "rtabmap-launch"
+    packages_required:
+      - "rtabmap-launch"
+      - "rtabmap-slam"
+      - "rtabmap-odom"
+      - "ros2launch"
+      - "launch-ros"
+    setup:
+      - command: >
+          ros2 launch rtabmap_launch rtabmap.launch.py
+          > /tmp/rtabmap_launch.log 2>&1
+        background: true
+        wait: 25
+    command: "cat /tmp/rtabmap_launch.log"
+    expect_contains:
+      - "process started with pid"
+    expect_not_contains:
+      - "Cannot allocate memory"
+      - "std::bad_alloc"
+      - "Segmentation fault"
+      - "Killed"
+      - "SIGKILL"
+      - "error while loading shared libraries"
+    cleanup:
+      - command: "pkill -9 -f 'rtabmap_slam/rtabmap' 2>/dev/null || true"
+      - command: "pkill -9 -f 'rtabmap_odom/rgbd_odometry' 2>/dev/null || true"
+      - command: "pkill -9 -f 'ros2.launch.*rtabmap' 2>/dev/null || true"
+      - command: "sleep 3"
+    timeout: 60
+    on_failure:
+      diagnose: "RTAB-Map 节点启动失败"
+      suggestions:
+        - "检查 ros-humble-rtabmap-slam 和 ros-humble-rtabmap-odom 是否安装"
+        - "rtabmap_viz 缺失报错可忽略（需要 Qt GUI）"
+        - "查看详细日志: cat /tmp/rtabmap_launch.log"
+        - "检查动态库: ldd /opt/ros/humble/lib/rtabmap_slam/rtabmap"
+        - "检查系统内存: free -h (rtabmap 内存占用较大)"
+
+  - id: "integ_004"
+    name: "RTAB-Map 核心进程运行"
+    description: >
+      验证 rtabmap 和 rgbd_odometry 两个核心进程确实在运行。
+      即使没有传感器数据，这两个进程也应持续等待输入。
+    priority: "P1"
+    requires_packages:
+      - "rtabmap-launch"
+    setup:
+      - command: >
+          ros2 launch rtabmap_launch rtabmap.launch.py
+          > /tmp/rtabmap_launch_proc.log 2>&1
+        background: true
+        wait: 25
+    command: >
+      RTABMAP_COUNT=$(ps aux | grep -E 'rtabmap_slam/rtabmap|rtabmap_odom/rgbd_odometry' | grep -v grep | wc -l);
+      echo "RTABMAP_PROCS=$RTABMAP_COUNT";
+      if [ "$RTABMAP_COUNT" -ge 2 ]; then echo "RTABMAP_RUNNING_OK"; else
+        echo "RTABMAP_RUNNING_FAIL";
+        echo "--- launch log tail ---";
+        tail -20 /tmp/rtabmap_launch_proc.log;
+        echo "--- dmesg tail ---";
+        dmesg | tail -5;
+      fi
+    expect_contains:
+      - "RTABMAP_RUNNING_OK"
+    cleanup:
+      - command: "pkill -9 -f 'rtabmap_slam/rtabmap' 2>/dev/null || true"
+      - command: "pkill -9 -f 'rtabmap_odom/rgbd_odometry' 2>/dev/null || true"
+      - command: "pkill -9 -f 'ros2.launch.*rtabmap' 2>/dev/null || true"
+      - command: "sleep 3"
+    timeout: 60
+    on_failure:
+      diagnose: "RTAB-Map 核心进程未运行（可能被 OOM Killer 终止或崩溃）"
+      suggestions:
+        - "检查 dmesg 是否有 OOM Killer 记录: dmesg | grep -i oom"
+        - "检查 rtabmap 二进制文件: file /opt/ros/humble/lib/rtabmap_slam/rtabmap"
+        - "检查动态库: ldd /opt/ros/humble/lib/rtabmap_slam/rtabmap"
+        - "检查系统内存: free -h"
+
+  # ============================================================
+  # Nav2 导航栈测试
+  # ============================================================
+  - id: "integ_005"
+    name: "Nav2 导航栈启动与 Lifecycle 激活"
+    description: >
+      验证 nav2_bringup bringup_launch.py 能启动完整导航栈。
+      使用真实 RTAB-Map 生成的地图文件（277x295 @ 0.05m/pix），
+      检查 lifecycle_manager_localization 成功激活 map_server 和 amcl，
+      输出 "Managed nodes are active"。
+      嵌入式设备启动较慢，需要 30 秒以上的初始化时间。
+    priority: "P1"
+    requires_packages:
+      - "nav2-bringup"
+    packages_required:
+      - "nav2-bringup"
+      - "nav2-map-server"
+      - "nav2-amcl"
+      - "nav2-controller"
+      - "nav2-planner"
+      - "nav2-bt-navigator"
+      - "nav2-lifecycle-manager"
+      - "ros2launch"
+      - "launch-ros"
+    setup:
+      - command: >
+          ros2 launch nav2_bringup bringup_launch.py
+          use_composition:=False
+          map:=/tmp/ros2_test_data/map/rtabmap.yaml
+          > /tmp/nav2_launch.log 2>&1
+        background: true
+        wait: 35
+    command: "cat /tmp/nav2_launch.log"
+    expect_contains:
+      - "Managed nodes are active"
+    expect_not_contains:
+      - "Cannot allocate memory"
+      - "std::bad_alloc"
+      - "Segmentation fault"
+      - "Killed"
+      - "SIGKILL"
+      - "error while loading shared libraries"
+      - "what():  vector"
+    cleanup:
+      - command: "pkill -9 -f 'nav2_' 2>/dev/null || true"
+      - command: "pkill -9 -f 'lifecycle_manager' 2>/dev/null || true"
+      - command: "pkill -9 -f 'amcl' 2>/dev/null || true"
+      - command: "pkill -9 -f 'map_server' 2>/dev/null || true"
+      - command: "pkill -9 -f 'ros2.launch.*nav2' 2>/dev/null || true"
+      - command: "sleep 3"
+    timeout: 90
+    on_failure:
+      diagnose: "Nav2 导航栈启动失败或 lifecycle 激活超时"
+      suggestions:
+        - "嵌入式设备可能需要更长启动时间，尝试增加 wait 到 45 秒"
+        - "检查地图文件: ls -la /tmp/ros2_test_data/map/"
+        - "检查日志: cat /tmp/nav2_launch.log"
+        - "检查系统内存: free -h (Nav2 全栈约需 500MB+)"
+        - "检查 dmesg 是否有 OOM: dmesg | grep -i oom"
+
+  - id: "integ_006"
+    name: "Nav2 地图加载验证"
+    description: >
+      验证 map_server 正确加载了 RTAB-Map 生成的真实地图（277x295 @ 0.05m/pix）。
+      AMCL 收到地图后会输出 "Received a 277 X 295 map" 日志。
+    priority: "P1"
+    requires_packages:
+      - "nav2-bringup"
+    setup:
+      - command: >
+          ros2 launch nav2_bringup bringup_launch.py
+          use_composition:=False
+          map:=/tmp/ros2_test_data/map/rtabmap.yaml
+          > /tmp/nav2_launch_map.log 2>&1
+        background: true
+        wait: 35
+    command: "grep 'Received a.*map' /tmp/nav2_launch_map.log || echo 'MAP_NOT_LOADED'"
+    expect_contains:
+      - "277 X 295"
+    cleanup:
+      - command: "pkill -9 -f 'nav2_' 2>/dev/null || true"
+      - command: "pkill -9 -f 'lifecycle_manager' 2>/dev/null || true"
+      - command: "pkill -9 -f 'amcl' 2>/dev/null || true"
+      - command: "pkill -9 -f 'map_server' 2>/dev/null || true"
+      - command: "pkill -9 -f 'ros2.launch.*nav2' 2>/dev/null || true"
+      - command: "sleep 3"
+    timeout: 90
+    on_failure:
+      diagnose: "Nav2 地图加载失败"
+      suggestions:
+        - "检查地图文件: ls /tmp/ros2_test_data/map/"
+        - "验证 yaml 中 image 路径: cat /tmp/ros2_test_data/map/rtabmap.yaml"
+        - "查看日志: cat /tmp/nav2_launch_map.log"
+        - "可能 map_server 尚未激活，增加 wait 时间"
+
+  - id: "integ_007"
+    name: "Nav2 核心节点进程运行"
+    description: >
+      验证 Nav2 导航栈的核心节点进程都在运行：
+      map_server, amcl, controller_server, planner_server,
+      bt_navigator, lifecycle_manager (×2)。
+      至少 6 个进程表示导航栈基本完整。
+    priority: "P1"
+    requires_packages:
+      - "nav2-bringup"
+    setup:
+      - command: >
+          ros2 launch nav2_bringup bringup_launch.py
+          use_composition:=False
+          map:=/tmp/ros2_test_data/map/rtabmap.yaml
+          > /tmp/nav2_launch_proc.log 2>&1
+        background: true
+        wait: 35
+    command: >
+      NAV2_COUNT=$(ps aux | grep -E 'nav2_map_server/map_server|nav2_amcl/amcl|nav2_controller/controller_server|nav2_planner/planner_server|nav2_bt_navigator/bt_navigator|nav2_lifecycle_manager/lifecycle_manager' | grep -v grep | wc -l);
+      echo "NAV2_PROCS=$NAV2_COUNT";
+      if [ "$NAV2_COUNT" -ge 6 ]; then echo "NAV2_STACK_OK"; else
+        echo "NAV2_STACK_INCOMPLETE";
+        echo "--- running nav2 processes ---";
+        ps aux | grep -E 'nav2_|lifecycle' | grep -v grep;
+        echo "--- launch log errors ---";
+        grep -i -E 'error|fail|killed|alloc|abort' /tmp/nav2_launch_proc.log | tail -10;
+        echo "--- dmesg tail ---";
+        dmesg | tail -5;
+        echo "--- memory ---";
+        free -h;
+      fi
+    expect_contains:
+      - "NAV2_STACK_OK"
+    cleanup:
+      - command: "pkill -9 -f 'nav2_' 2>/dev/null || true"
+      - command: "pkill -9 -f 'lifecycle_manager' 2>/dev/null || true"
+      - command: "pkill -9 -f 'amcl' 2>/dev/null || true"
+      - command: "pkill -9 -f 'map_server' 2>/dev/null || true"
+      - command: "pkill -9 -f 'ros2.launch.*nav2' 2>/dev/null || true"
+      - command: "sleep 3"
+    timeout: 90
+    on_failure:
+      diagnose: "Nav2 部分核心节点未启动（可能被 OOM Killer 终止、崩溃或初始化超时）"
+      suggestions:
+        - "检查 dmesg 是否有 OOM Killer: dmesg | grep -i oom"
+        - "检查是否有 core dump: ls /tmp/core.*"
+        - "嵌入式设备启动慢，尝试增加 wait 到 45-60 秒"
+        - "检查各 nav2 子包是否安装完整"
+        - "检查系统内存: free -h (Nav2 全栈约需 500MB+)"
