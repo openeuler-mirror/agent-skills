@@ -1,0 +1,94 @@
+# ROS2 包管理测试
+# 验证核心ROS2包是否正确安装
+
+name: "包管理测试"
+description: "验证核心ROS2包是否正确安装和可用"
+version: "1.0"
+category: "package"
+priority: 1
+depends_on:
+  - "environment"
+
+test_cases:
+  - id: "pkg_001"
+    name: "检查rclcpp包"
+    description: "验证rclcpp C++客户端库已安装"
+    priority: "P0"
+    command: "ros2 pkg list | grep -w rclcpp"
+    expect_contains:
+      - "rclcpp"
+    timeout: 15
+    on_failure:
+      diagnose: "rclcpp包未安装"
+      suggestions:
+        - "安装: dnf install ros-humble-rclcpp"
+        - "这是核心依赖，必须安装"
+
+  - id: "pkg_002"
+    name: "检查rclpy包"
+    description: "验证rclpy Python客户端库已安装"
+    priority: "P0"
+    command: "ros2 pkg list | grep -w rclpy"
+    expect_contains:
+      - "rclpy"
+    timeout: 15
+    on_failure:
+      diagnose: "rclpy包未安装"
+      suggestions:
+        - "安装: dnf install ros-humble-rclpy"
+        - "这是核心依赖，必须安装"
+
+  - id: "pkg_003"
+    name: "检查demo_nodes_cpp"
+    description: "验证C++ demo节点包已安装"
+    priority: "P1"
+    command: "ros2 pkg list | grep demo_nodes_cpp"
+    expect_contains:
+      - "demo_nodes_cpp"
+    timeout: 15
+    on_failure:
+      diagnose: "demo_nodes_cpp包未安装"
+      suggestions:
+        - "安装: dnf install ros-humble-demo-nodes-cpp"
+        - "用于基础功能测试"
+
+  - id: "pkg_004"
+    name: "检查demo_nodes_py"
+    description: "验证Python demo节点包已安装"
+    priority: "P1"
+    command: "ros2 pkg list | grep demo_nodes_py"
+    expect_contains:
+      - "demo_nodes_py"
+    timeout: 15
+    on_failure:
+      diagnose: "demo_nodes_py包未安装"
+      suggestions:
+        - "安装: dnf install ros-humble-demo-nodes-py"
+        - "用于基础功能测试"
+
+  - id: "pkg_005"
+    name: "检查std_msgs包"
+    description: "验证标准消息类型包已安装"
+    priority: "P1"
+    command: "ros2 pkg list | grep -w std_msgs"
+    expect_contains:
+      - "std_msgs"
+    timeout: 15
+    on_failure:
+      diagnose: "std_msgs包未安装"
+      suggestions:
+        - "安装: dnf install ros-humble-std-msgs"
+
+  - id: "pkg_006"
+    name: "列出rclcpp可执行文件"
+    description: "验证rclcpp包的可执行文件列表正常"
+    priority: "P2"
+    command: "ros2 pkg executables rclcpp 2>/dev/null || echo 'No executables'"
+    expect_not_contains:
+      - "Package not found"
+      - "error"
+    timeout: 10
+    on_failure:
+      diagnose: "无法获取rclcpp可执行文件"
+      suggestions:
+        - "检查包安装完整性"

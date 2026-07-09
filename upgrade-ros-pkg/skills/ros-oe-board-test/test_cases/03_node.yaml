@@ -1,0 +1,95 @@
+# ROS2 节点管理测试
+# 验证ROS2节点的生命周期管理
+
+name: "节点管理测试"
+description: "验证ROS2节点的生命周期管理功能"
+version: "1.0"
+category: "node"
+priority: 2
+depends_on:
+  - "environment"
+  - "package"
+
+test_cases:
+  - id: "node_001"
+    name: "启动C++ talker节点"
+    description: "验证可以启动demo C++节点"
+    priority: "P0"
+    setup:
+      - command: "ros2 run demo_nodes_cpp talker > /tmp/talker.log 2>&1"
+        background: true
+        wait: 3
+    command: "ps aux | grep -v grep | grep 'demo_nodes_cpp talker' && echo 'NODE_RUNNING'"
+    expect_contains:
+      - "NODE_RUNNING"
+    cleanup:
+      - command: "pkill -f 'demo_nodes_cpp' 2>/dev/null || true"
+    timeout: 15
+    on_failure:
+      diagnose: "无法启动C++节点"
+      suggestions:
+        - "检查 demo_nodes_cpp 是否正确安装"
+        - "检查是否有进程冲突"
+        - "查看 /tmp/talker.log 日志"
+
+  - id: "node_002"
+    name: "列出运行中的节点"
+    description: "验证ros2 node list命令正常"
+    priority: "P0"
+    setup:
+      - command: "ros2 run demo_nodes_cpp talker > /dev/null 2>&1"
+        background: true
+        wait: 3
+    command: "ros2 node list"
+    expect_contains:
+      - "/talker"
+    cleanup:
+      - command: "pkill -f 'demo_nodes_cpp' 2>/dev/null || true"
+    timeout: 15
+    on_failure:
+      diagnose: "无法列出运行中的节点"
+      suggestions:
+        - "检查RMW通信是否正常"
+        - "检查DDS配置"
+
+  - id: "node_003"
+    name: "获取节点信息"
+    description: "验证ros2 node info命令正常"
+    priority: "P1"
+    setup:
+      - command: "ros2 run demo_nodes_cpp talker > /dev/null 2>&1"
+        background: true
+        wait: 3
+    command: "ros2 node info /talker"
+    expect_contains:
+      - "Publishers:"
+      - "Subscribers:"
+    cleanup:
+      - command: "pkill -f 'demo_nodes_cpp' 2>/dev/null || true"
+    timeout: 15
+    on_failure:
+      diagnose: "无法获取节点信息"
+      suggestions:
+        - "检查节点是否正常运行"
+        - "检查RMW通信"
+
+  - id: "node_004"
+    name: "启动Python talker节点"
+    description: "验证可以启动demo Python节点"
+    priority: "P0"
+    setup:
+      - command: "ros2 run demo_nodes_py talker > /tmp/py_talker.log 2>&1"
+        background: true
+        wait: 3
+    command: "ps aux | grep -v grep | grep 'demo_nodes_py' && echo 'NODE_RUNNING'"
+    expect_contains:
+      - "NODE_RUNNING"
+    cleanup:
+      - command: "pkill -f 'demo_nodes_py' 2>/dev/null || true"
+    timeout: 15
+    on_failure:
+      diagnose: "无法启动Python节点"
+      suggestions:
+        - "检查 demo_nodes_py 是否正确安装"
+        - "检查Python环境"
+        - "查看 /tmp/py_talker.log 日志"

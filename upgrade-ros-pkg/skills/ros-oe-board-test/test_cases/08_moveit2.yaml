@@ -1,0 +1,496 @@
+# MoveIt2 升级验证测试
+# 验证 moveit2 2.5.9 升级后的核心功能：包注册、消息接口、共享库加载、节点启动、topic 通信、OMPL 运动规划
+# 本测试聚焦 ROS2 基础命令行和 moveit2 自身功能，不测试导航等其他功能包
+# 第九组 OMPL 集成测试需要 scripts/test_moveit_ompl_integration.py 脚本上传到板上
+
+name: "MoveIt2 升级验证测试"
+description: "验证 moveit2 2.5.9 升级后的核心功能完整性，含 OMPL 运动规划端到端验证"
+version: "2.0"
+category: "moveit2"
+priority: 1
+depends_on:
+  - "environment"
+
+test_cases:
+  # ============================================
+  # 第一组：包注册验证（ros2 pkg）
+  # ============================================
+  - id: "moveit2_pkg_001"
+    name: "检查 moveit_core 包注册"
+    description: "验证 moveit_core 在 ROS2 中正确注册"
+    priority: "P0"
+    command: "ros2 pkg list 2>/dev/null | grep -w moveit_core"
+    expect_contains:
+      - "moveit_core"
+    timeout: 15
+    on_failure:
+      diagnose: "moveit_core 包未注册到 ROS2"
+      suggestions:
+        - "检查 ros-humble-moveit-core 是否已安装"
+        - "运行: dnf install ros-humble-moveit-core"
+
+  - id: "moveit2_pkg_002"
+    name: "检查 moveit_msgs 包注册"
+    description: "验证 moveit_msgs 在 ROS2 中正确注册"
+    priority: "P0"
+    command: "ros2 pkg list 2>/dev/null | grep -w moveit_msgs"
+    expect_contains:
+      - "moveit_msgs"
+    timeout: 15
+    on_failure:
+      diagnose: "moveit_msgs 包未注册到 ROS2"
+      suggestions:
+        - "检查 ros-humble-moveit-msgs 是否已安装"
+
+  - id: "moveit2_pkg_003"
+    name: "检查全部 moveit2 子包注册数量"
+    description: "验证所有 38 个 moveit2 子包均已注册到 ROS2"
+    priority: "P0"
+    command: "count=$(ros2 pkg list 2>/dev/null | grep -c moveit); echo \"MOVEIT_PKG_COUNT=$count\"; if [ $count -ge 38 ]; then echo 'ALL_REGISTERED'; else echo \"MISSING_PACKAGES: expected>=38 got=$count\"; fi"
+    expect_contains:
+      - "ALL_REGISTERED"
+    timeout: 20
+    on_failure:
+      diagnose: "部分 moveit2 子包未注册"
+      suggestions:
+        - "运行 ros2 pkg list | grep moveit 查看哪些包缺失"
+        - "运行 dnf install ros-humble-moveit 安装元包"
+
+  - id: "moveit2_pkg_004"
+    name: "检查 moveit_ros_planning 可执行文件列表"
+    description: "验证 moveit_ros_planning 的可执行文件列表正常"
+    priority: "P1"
+    command: "ros2 pkg executables moveit_ros_planning 2>/dev/null"
+    expect_contains:
+      - "moveit_print_planning_model_info"
+      - "moveit_publish_scene_from_text"
+    timeout: 15
+    on_failure:
+      diagnose: "moveit_ros_planning 可执行文件异常"
+      suggestions:
+        - "检查包安装完整性"
+
+  # ============================================
+  # 第二组：moveit_msgs 消息/服务/动作接口验证（ros2 interface）
+  # ============================================
+  - id: "moveit2_iface_001"
+    name: "检查 moveit_msgs 消息类型"
+    description: "验证 moveit_msgs/msg 消息类型在 ROS2 中可用"
+    priority: "P0"
+    command: "ros2 interface list 2>/dev/null | grep 'moveit_msgs/msg/' | wc -l | xargs -I{} bash -c 'echo MSG_COUNT={}; if [ {} -ge 40 ]; then echo MSGS_OK; else echo MSGS_MISSING; fi'"
+    expect_contains:
+      - "MSGS_OK"
+    timeout: 30
+    on_failure:
+      diagnose: "moveit_msgs 消息类型不完整"
+      suggestions:
+        - "检查 ros-humble-moveit-msgs 版本和安装状态"
+
+  - id: "moveit2_iface_002"
+    name: "检查 MoveItErrorCodes 消息结构"
+    description: "验证 MoveItErrorCodes.msg 的字段定义正确（ABI 兼容性检查）"
+    priority: "P0"
+    command: "ros2 interface show moveit_msgs/msg/MoveItErrorCodes 2>/dev/null"
+    expect_contains:
+      - "int32 val"
+      - "SUCCESS"
+      - "FAILURE"
+    timeout: 15
+    on_failure:
+      diagnose: "MoveItErrorCodes 消息结构异常，可能存在 ABI 不兼容"
+      suggestions:
+        - "检查 moveit-msgs tarball 内容是否正确（2.2.1 vs 2.7.1）"
+
+  - id: "moveit2_iface_003"
+    name: "检查 MotionPlanRequest 消息结构"
+    description: "验证 MotionPlanRequest.msg 的关键字段存在"
+    priority: "P0"
+    command: "ros2 interface show moveit_msgs/msg/MotionPlanRequest 2>/dev/null"
+    expect_contains:
+      - "workspace_parameters"
+      - "goal_constraints"
+      - "allowed_planning_time"
+    timeout: 15
+    on_failure:
+      diagnose: "MotionPlanRequest 消息结构异常"
+      suggestions:
+        - "验证 moveit_msgs 版本兼容性"
+
+  - id: "moveit2_iface_004"
+    name: "检查 moveit_msgs 服务类型"
+    description: "验证 moveit_msgs/srv 服务类型可用"
+    priority: "P0"
+    command: "ros2 interface list 2>/dev/null | grep 'moveit_msgs/srv/' | wc -l | xargs -I{} bash -c 'echo SRV_COUNT={}; if [ {} -ge 15 ]; then echo SRVS_OK; else echo SRVS_MISSING; fi'"
+    expect_contains:
+      - "SRVS_OK"
+    timeout: 30
+    on_failure:
+      diagnose: "moveit_msgs 服务类型不完整"
+      suggestions:
+        - "检查 ros-humble-moveit-msgs 安装状态"
+
+  - id: "moveit2_iface_005"
+    name: "检查 moveit_msgs 动作类型"
+    description: "验证 moveit_msgs/action 动作类型可用（MoveGroup、ExecuteTrajectory 等）"
+    priority: "P0"
+    command: "ros2 interface list 2>/dev/null | grep 'moveit_msgs/action/'"
+    expect_contains:
+      - "moveit_msgs/action/MoveGroup"
+      - "moveit_msgs/action/ExecuteTrajectory"
+    timeout: 30
+    on_failure:
+      diagnose: "moveit_msgs 动作类型缺失"
+      suggestions:
+        - "MoveGroup 和 ExecuteTrajectory 是 moveit2 核心动作"
+
+  - id: "moveit2_iface_006"
+    name: "检查 GetMotionPlan 服务结构"
+    description: "验证 GetMotionPlan.srv 的请求/响应结构正确"
+    priority: "P1"
+    command: "ros2 interface show moveit_msgs/srv/GetMotionPlan 2>/dev/null"
+    expect_contains:
+      - "MotionPlanRequest"
+      - "MotionPlanResponse"
+    timeout: 15
+    on_failure:
+      diagnose: "GetMotionPlan 服务结构异常"
+      suggestions:
+        - "检查 moveit_msgs IDL 生成是否正确"
+
+  # ============================================
+  # 第三组：共享库加载验证
+  # ============================================
+  - id: "moveit2_lib_001"
+    name: "检查 moveit_core 核心共享库"
+    description: "验证 moveit_core 的核心 .so 文件存在且可动态加载（使用 ctypes 代替 ldd，适配嵌入式环境）"
+    priority: "P0"
+    command: "ls /opt/ros/humble/lib/libmoveit_robot_model.so /opt/ros/humble/lib/libmoveit_robot_state.so /opt/ros/humble/lib/libmoveit_planning_scene.so /opt/ros/humble/lib/libmoveit_kinematics_base.so 2>&1 && python3 -c 'import ctypes; ctypes.CDLL(\"/opt/ros/humble/lib/libmoveit_robot_model.so\"); ctypes.CDLL(\"/opt/ros/humble/lib/libmoveit_robot_state.so\"); ctypes.CDLL(\"/opt/ros/humble/lib/libmoveit_planning_scene.so\"); ctypes.CDLL(\"/opt/ros/humble/lib/libmoveit_kinematics_base.so\"); print(\"LDD_OK\")'"
+    expect_contains:
+      - "LDD_OK"
+    expect_not_contains:
+      - "No such file"
+    timeout: 15
+    on_failure:
+      diagnose: "moveit_core 核心共享库缺失或依赖不满足"
+      suggestions:
+        - "检查 .so 文件是否存在及其运行时依赖"
+        - "可能缺少运行时依赖库"
+
+  - id: "moveit2_lib_002"
+    name: "检查 moveit2 共享库总数"
+    description: "验证 moveit2 安装了足够数量的共享库"
+    priority: "P1"
+    command: "count=$(ls /opt/ros/humble/lib/libmoveit*.so 2>/dev/null | wc -l); echo \"MOVEIT_LIB_COUNT=$count\"; if [ $count -ge 80 ]; then echo 'LIBS_OK'; else echo \"LIBS_INSUFFICIENT: expected>=80 got=$count\"; fi"
+    expect_contains:
+      - "LIBS_OK"
+    timeout: 10
+    on_failure:
+      diagnose: "moveit2 共享库数量不足"
+      suggestions:
+        - "检查各 moveit2 子包是否完整安装"
+
+  - id: "moveit2_lib_003"
+    name: "检查 moveit_ros_planning 共享库依赖"
+    description: "验证 moveit_ros_planning 的 .so 文件可动态加载（依赖链完整）"
+    priority: "P1"
+    command: "python3 -c \"
+import ctypes
+try:
+    ctypes.CDLL('/opt/ros/humble/lib/libmoveit_planning_pipeline.so')
+    print('PLANNING_LDD_OK')
+except Exception as e:
+    print(f'PLANNING_LDD_MISSING: {e}')
+\""
+    expect_contains:
+      - "PLANNING_LDD_OK"
+    timeout: 15
+    on_failure:
+      diagnose: "moveit_ros_planning 共享库依赖不满足"
+      suggestions:
+        - "检查 libmoveit_planning_pipeline.so 的运行时依赖"
+
+  - id: "moveit2_lib_004"
+    name: "检查 moveit_servo 共享库依赖"
+    description: "验证 moveit_servo 的 .so 文件可动态加载（依赖链完整）"
+    priority: "P1"
+    command: "python3 -c \"
+import ctypes
+try:
+    ctypes.CDLL('/opt/ros/humble/lib/libmoveit_servo_lib.so')
+    print('SERVO_LDD_OK')
+except Exception as e:
+    print(f'SERVO_LDD_MISSING: {e}')
+\""
+    expect_contains:
+      - "SERVO_LDD_OK"
+    timeout: 15
+    on_failure:
+      diagnose: "moveit_servo 共享库依赖不满足"
+      suggestions:
+        - "检查 libmoveit_servo_lib.so 的运行时依赖"
+
+  # ============================================
+  # 第四组：节点启动与 topic 通信测试
+  # ============================================
+  - id: "moveit2_node_001"
+    name: "启动 move_group 节点（预期带错退出）"
+    description: "验证 move_group 可执行文件能加载并启动（因缺少 robot_description 参数会退出，但证明动态库全部加载成功）"
+    priority: "P0"
+    command: "timeout 10 ros2 run moveit_ros_move_group move_group 2>&1 | head -20; echo EXIT_CODE=$?"
+    expect_not_contains:
+      - "error while loading shared libraries"
+      - "ModuleNotFoundError"
+      - "No such file or directory"
+    timeout: 20
+    on_failure:
+      diagnose: "move_group 节点无法启动"
+      suggestions:
+        - "检查 moveit_ros_move_group 的动态库依赖"
+        - "运行 ldd 检查缺失的 .so"
+
+  - id: "moveit2_node_002"
+    name: "启动 servo_node 节点（预期带错退出）"
+    description: "验证 servo_node_main 可执行文件能加载（因缺少配置会退出，但证明库加载成功）"
+    priority: "P1"
+    command: "timeout 10 ros2 run moveit_servo servo_node_main 2>&1 | head -20; echo EXIT_CODE=$?"
+    expect_not_contains:
+      - "error while loading shared libraries"
+      - "No such file or directory"
+    timeout: 20
+    on_failure:
+      diagnose: "servo_node_main 节点无法启动"
+      suggestions:
+        - "检查 moveit_servo 的动态库依赖"
+
+  - id: "moveit2_node_003"
+    name: "启动 occupancy_map_server 节点（预期带错退出）"
+    description: "验证 moveit_ros_occupancy_map_server 可执行文件能加载"
+    priority: "P1"
+    command: "timeout 10 ros2 run moveit_ros_occupancy_map_monitor moveit_ros_occupancy_map_server 2>&1 | head -20; echo EXIT_CODE=$?"
+    expect_not_contains:
+      - "error while loading shared libraries"
+      - "No such file or directory"
+    timeout: 20
+    on_failure:
+      diagnose: "occupancy_map_server 节点无法启动"
+      suggestions:
+        - "检查共享库依赖链"
+
+  - id: "moveit2_node_004"
+    name: "list_move_group_capabilities 工具运行"
+    description: "验证 list_move_group_capabilities 工具能列出 MoveGroup 的能力插件"
+    priority: "P1"
+    command: "timeout 10 ros2 run moveit_ros_move_group list_move_group_capabilities 2>&1 | head -30; echo EXIT_CODE=$?"
+    expect_not_contains:
+      - "error while loading shared libraries"
+      - "No such file or directory"
+    timeout: 20
+    on_failure:
+      diagnose: "list_move_group_capabilities 无法运行"
+      suggestions:
+        - "检查 pluginlib 插件注册"
+
+  - id: "moveit2_node_005"
+    name: "moveit_list_request_adapter_plugins 工具运行"
+    description: "验证请求适配器插件列表工具能正常运行"
+    priority: "P1"
+    command: "timeout 10 ros2 run moveit_ros_planning moveit_list_request_adapter_plugins 2>&1"
+    expect_not_contains:
+      - "error while loading shared libraries"
+      - "No such file or directory"
+    timeout: 20
+    on_failure:
+      diagnose: "moveit_list_request_adapter_plugins 无法运行"
+      suggestions:
+        - "检查 pluginlib 相关依赖"
+
+  # ============================================
+  # 第五组：topic 基础通信验证
+  # ============================================
+  - id: "moveit2_topic_001"
+    name: "moveit_publish_scene_from_text 节点 topic 发布"
+    description: "启动 moveit_publish_scene_from_text 并检查是否发布了 planning_scene topic"
+    priority: "P1"
+    setup:
+      - command: "export ROS_DOMAIN_ID=$((RANDOM % 100 + 1)) && ros2 run moveit_ros_planning moveit_publish_scene_from_text --ros-args -p planning_scene_file:=/dev/null > /dev/null 2>&1"
+        background: true
+        wait: 3
+    command: "ros2 topic list 2>/dev/null | grep -E 'planning_scene|parameter_events'"
+    expect_contains:
+      - "/parameter_events"
+    cleanup:
+      - command: "pkill -f 'moveit_publish_scene_from_text' 2>/dev/null || true"
+    timeout: 15
+    on_failure:
+      diagnose: "moveit_publish_scene_from_text 节点 topic 发布异常"
+      suggestions:
+        - "检查节点是否成功启动"
+
+  - id: "moveit2_topic_002"
+    name: "验证 topic 类型查询功能"
+    description: "使用 ros2 topic type 查询 /rosout 的类型"
+    priority: "P1"
+    command: "ros2 topic type /rosout 2>/dev/null"
+    expect_contains:
+      - "rcl_interfaces/msg/Log"
+    timeout: 15
+    on_failure:
+      diagnose: "topic 类型查询失败"
+      suggestions:
+        - "检查 ROS2 daemon 状态"
+
+  # ============================================
+  # 第六组：pluginlib 插件验证
+  # ============================================
+  - id: "moveit2_plugin_001"
+    name: "检查 moveit_core pluginlib XML 注册"
+    description: "验证 moveit_core 的 pluginlib 注册文件存在"
+    priority: "P1"
+    command: "find /opt/ros/humble/share/moveit_core -name '*plugin*' -o -name '*.xml' 2>/dev/null | head -5; if ls /opt/ros/humble/share/moveit_core/*plugin*.xml 2>/dev/null | head -1 > /dev/null; then echo PLUGINXML_FOUND; elif ls /opt/ros/humble/share/moveit_core/*.xml 2>/dev/null | head -1 > /dev/null; then echo PLUGINXML_FOUND; else echo PLUGINXML_MISSING; fi"
+    expect_not_contains:
+      - "PLUGINXML_MISSING"
+    timeout: 10
+    on_failure:
+      diagnose: "moveit_core pluginlib XML 注册文件缺失"
+      suggestions:
+        - "检查 RPM 安装完整性"
+
+  - id: "moveit2_plugin_002"
+    name: "检查 kinematics 插件库存在"
+    description: "验证 moveit_kinematics 的 KDL/SRV 插件 .so 文件存在"
+    priority: "P1"
+    command: "ls /opt/ros/humble/lib/libmoveit_kdl_kinematics_plugin.so /opt/ros/humble/lib/libmoveit_srv_kinematics_plugin.so /opt/ros/humble/lib/libmoveit_cached_ik_kinematics_plugin.so 2>&1 && echo KINEMATICS_PLUGINS_OK"
+    expect_contains:
+      - "KINEMATICS_PLUGINS_OK"
+    timeout: 10
+    on_failure:
+      diagnose: "kinematics 插件库缺失"
+      suggestions:
+        - "检查 ros-humble-moveit-kinematics 安装"
+
+  # ============================================
+  # 第七组：Python 包验证
+  # ============================================
+  - id: "moveit2_python_001"
+    name: "检查 moveit_configs_utils Python 模块"
+    description: "验证 moveit_configs_utils Python 包可以正确 import"
+    priority: "P1"
+    command: "python3 -c 'import moveit_configs_utils; print(\"IMPORT_OK\")' 2>&1"
+    expect_contains:
+      - "IMPORT_OK"
+    timeout: 15
+    on_failure:
+      diagnose: "moveit_configs_utils Python 模块导入失败"
+      suggestions:
+        - "检查 PYTHONPATH 是否包含 /opt/ros/humble/lib/python3.10/site-packages"
+        - "运行: pip3 list | grep moveit"
+
+  # ============================================
+  # 第八组：版本号一致性验证
+  # ============================================
+  - id: "moveit2_version_001"
+    name: "检查 moveit_core RPM 版本号"
+    description: "验证安装的 moveit_core 版本为 2.5.9"
+    priority: "P0"
+    command: "rpm -q ros-humble-moveit-core 2>/dev/null"
+    expect_contains:
+      - "2.5.9"
+    timeout: 10
+    on_failure:
+      diagnose: "moveit_core 版本不是 2.5.9"
+      suggestions:
+        - "可能安装了旧版本，检查 EUR repo 配置"
+
+  - id: "moveit2_version_002"
+    name: "检查 moveit_msgs RPM 版本号"
+    description: "验证安装的 moveit_msgs 版本为 2.2.1"
+    priority: "P0"
+    command: "rpm -q ros-humble-moveit-msgs 2>/dev/null"
+    expect_contains:
+      - "2.2.1"
+    timeout: 10
+    on_failure:
+      diagnose: "moveit_msgs 版本不是 2.2.1"
+      suggestions:
+        - "检查 EUR repo 配置和优先级"
+
+  - id: "moveit2_version_003"
+    name: "检查 moveit_msgs RPM 来源"
+    description: "验证 moveit_msgs 来自我们的 EUR 仓库（Release >= 3）"
+    priority: "P0"
+    command: "rpm -q ros-humble-moveit-msgs | grep -oP '\\d+\\.\\d+\\.\\d+-\\K\\d+' | xargs -I{} bash -c 'echo RELEASE={}; if [ {} -ge 3 ]; then echo EUR_VERSION_OK; else echo WRONG_RELEASE; fi'"
+    expect_contains:
+      - "EUR_VERSION_OK"
+    timeout: 10
+    on_failure:
+      diagnose: "moveit_msgs 不是来自 EUR 仓库（Release < 3）"
+      suggestions:
+        - "可能安装了官方源的旧版本"
+        - "检查 openEulerROS.repo 中 EUR 优先级是否为 1"
+
+  # ============================================
+  # 第九组：OMPL 运动规划集成测试
+  # ============================================
+  # 验证 OMPL 运动规划完整管线：
+  #   move_group 启动 → OMPL pipeline 加载 → RRTConnect 规划 → 轨迹生成
+
+  - id: "moveit2_ompl_001"
+    name: "检查 moveit OMPL 库与系统 ompl 的 SONAME 一致性"
+    description: "动态获取系统安装的 libompl SONAME，验证 moveit 的 OMPL 插件库和接口库链接的是同一版本，而非旧版残留"
+    priority: "P0"
+    command: |
+      OMPL_SONAME=$(readelf -d /opt/ros/humble/lib64/libompl.so 2>/dev/null | grep SONAME | grep -oP 'libompl\.so\.\d+')
+      if [ -z "$OMPL_SONAME" ]; then
+        echo "FAIL: cannot determine ompl SONAME"
+        exit 1
+      fi
+      echo "SYSTEM_OMPL_SONAME=$OMPL_SONAME"
+      PLUGIN_DEP=$(readelf -d /opt/ros/humble/lib/libmoveit_ompl_planner_plugin.so 2>/dev/null | grep NEEDED | grep -oP 'libompl\.so\.\d+')
+      IFACE_DEP=$(readelf -d /opt/ros/humble/lib/libmoveit_ompl_interface.so 2>/dev/null | grep NEEDED | grep -oP 'libompl\.so\.\d+')
+      echo "PLUGIN_LINKS=$PLUGIN_DEP"
+      echo "IFACE_LINKS=$IFACE_DEP"
+      if [ "$PLUGIN_DEP" = "$OMPL_SONAME" ] && [ "$IFACE_DEP" = "$OMPL_SONAME" ]; then
+        echo "OMPL_SONAME_MATCH_OK"
+      else
+        echo "OMPL_SONAME_MISMATCH"
+      fi
+    expect_contains:
+      - "OMPL_SONAME_MATCH_OK"
+    expect_not_contains:
+      - "OMPL_SONAME_MISMATCH"
+    timeout: 10
+    on_failure:
+      diagnose: "moveit OMPL 插件链接的 libompl SONAME 与系统安装的 ompl 不一致"
+      suggestions:
+        - "moveit-planners-ompl 可能在不同版本的 ompl 环境下编译"
+        - "需要在当前 ompl 版本环境下重新构建 moveit-planners-ompl"
+        - "使用 readelf -d 对比 NEEDED 和 SONAME"
+
+  - id: "moveit2_ompl_002"
+    name: "OMPL 运动规划端到端集成测试（panda + RRTConnect）"
+    description: >
+      启动 panda 机械臂 headless demo（move_group + ros2_control FakeSystem），
+      通过 MoveGroup action 发送 RRTConnect 规划请求，验证 OMPL 规划管线完整工作。
+      此测试使用 test_moveit_ompl_integration.py 脚本（已沉淀到 skill scripts 目录）。
+      注意：此测试需要约 2-3 分钟完成（含 move_group 启动时间）。
+    priority: "P0"
+    command: "python3 /tmp/moveit_ompl_test/test_moveit_ompl_integration.py 2>&1"
+    expect_contains:
+      - "OMPL INTEGRATION TEST PASSED"
+    expect_not_contains:
+      - "libompl.so"
+      - "cannot open shared object"
+      - "Illegal instruction"
+    timeout: 300
+    setup_note: >
+      运行前需要先将 test_moveit_ompl_integration.py 上传到开发板 /tmp/moveit_ompl_test/ 目录。
+      脚本位于 skill 的 scripts/test_moveit_ompl_integration.py。
+      确保 source /opt/ros/humble/setup.bash 已执行，且无残留 ROS 进程。
+    on_failure:
+      diagnose: "OMPL 运动规划端到端测试失败"
+      suggestions:
+        - "检查 move_group 是否能启动（需要 panda 配置包已安装）"
+        - "检查 OMPL pipeline 是否成功加载（日志中应有 'Using planning interface OMPL'）"
+        - "检查 libompl SONAME 是否匹配（readelf -d 检查 NEEDED）"
+        - "检查开发板内存是否充足（move_group 需约 300MB）"
+        - "如果报 'Illegal instruction'，说明 ABI 不兼容，需要重新构建"

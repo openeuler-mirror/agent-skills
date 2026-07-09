@@ -1,1 +1,8 @@
 cve-fix/__pycache__/
+__pycache__/
+*.pyc
+*.log
+*/output/
+**/build_layers.txt
+**/final_layers.txt
+**/final_list.txt

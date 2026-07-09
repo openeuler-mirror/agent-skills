@@ -1,0 +1,164 @@
+# ROS2 话题通信测试
+# 验证ROS2话题的发布/订阅通信功能
+
+name: "话题通信测试"
+description: "验证ROS2话题的发布/订阅通信功能"
+version: "1.0"
+category: "topic"
+priority: 3
+depends_on:
+  - "environment"
+  - "package"
+  - "node"
+
+test_cases:
+  - id: "topic_001"
+    name: "列出话题列表"
+    description: "验证ros2 topic list命令正常"
+    priority: "P0"
+    setup:
+      - command: "ros2 run demo_nodes_cpp talker > /dev/null 2>&1"
+        background: true
+        wait: 3
+    command: "ros2 topic list"
+    expect_contains:
+      - "/chatter"
+      - "/parameter_events"
+    cleanup:
+      - command: "pkill -f 'demo_nodes_cpp' 2>/dev/null || true"
+    timeout: 15
+    on_failure:
+      diagnose: "无法列出话题"
+      suggestions:
+        - "检查节点是否正常运行"
+        - "检查RMW通信"
+
+  - id: "topic_002"
+    name: "C++ Talker发布消息"
+    description: "验证C++ talker节点能发布消息"
+    priority: "P0"
+    setup:
+      - command: "ros2 run demo_nodes_cpp talker > /dev/null 2>&1"
+        background: true
+        wait: 5
+    command: "timeout 5 ros2 topic echo /chatter --once 2>&1"
+    expect_contains:
+      - "Hello World"
+    cleanup:
+      - command: "pkill -f 'demo_nodes_cpp' 2>/dev/null || true"
+    timeout: 10
+    on_failure:
+      diagnose: "C++话题发布失败"
+      suggestions:
+        - "检查demo_nodes_cpp是否正确安装"
+        - "检查话题类型是否匹配"
+        - "检查RMW通信"
+
+  - id: "topic_003"
+    name: "Python Talker发布消息"
+    description: "验证Python talker节点能发布消息"
+    priority: "P0"
+    setup:
+      - command: "ros2 run demo_nodes_py talker > /dev/null 2>&1"
+        background: true
+        wait: 5
+    command: "timeout 5 ros2 topic echo /chatter --once 2>&1"
+    expect_contains:
+      - "Hello World"
+    cleanup:
+      - command: "pkill -f 'demo_nodes_py' 2>/dev/null || true"
+    timeout: 10
+    on_failure:
+      diagnose: "Python话题发布失败"
+      suggestions:
+        - "检查demo_nodes_py是否正确安装"
+        - "检查Python环境"
+
+  - id: "topic_004"
+    name: "C++ Talker-Listener通信"
+    description: "验证C++节点间话题通信"
+    priority: "P0"
+    setup:
+      - command: "ros2 run demo_nodes_cpp talker > /dev/null 2>&1"
+        background: true
+        wait: 2
+      - command: "ros2 run demo_nodes_cpp listener > /tmp/listener.log 2>&1"
+        background: true
+        wait: 3
+    command: "grep -q 'Hello World' /tmp/listener.log && echo 'COMM_OK' || echo 'COMM_FAILED'"
+    expect_contains:
+      - "COMM_OK"
+    cleanup:
+      - command: "pkill -f 'demo_nodes_cpp' 2>/dev/null || true"
+    timeout: 20
+    on_failure:
+      diagnose: "C++节点间通信失败"
+      suggestions:
+        - "检查RMW DDS配置"
+        - "检查网络配置"
+        - "检查防火墙设置"
+
+  - id: "topic_005"
+    name: "跨语言通信 C++ Publisher + Python Subscriber"
+    description: "验证C++和Python节点间可以通信"
+    priority: "P1"
+    setup:
+      - command: "ros2 run demo_nodes_cpp talker > /dev/null 2>&1"
+        background: true
+        wait: 2
+      - command: "ros2 run demo_nodes_py listener > /tmp/py_listener.log 2>&1"
+        background: true
+        wait: 3
+    command: "grep -q 'Hello World' /tmp/py_listener.log && echo 'CROSS_LANG_OK' || echo 'CROSS_LANG_FAILED'"
+    expect_contains:
+      - "CROSS_LANG_OK"
+    cleanup:
+      - command: "pkill -f 'demo_nodes' 2>/dev/null || true"
+    timeout: 20
+    on_failure:
+      diagnose: "跨语言通信失败"
+      suggestions:
+        - "检查消息类型定义是否一致"
+        - "检查IDL生成是否正确"
+        - "检查rosidl包"
+
+  - id: "topic_006"
+    name: "话题信息查询"
+    description: "验证ros2 topic info命令正常"
+    priority: "P1"
+    setup:
+      - command: "ros2 run demo_nodes_cpp talker > /dev/null 2>&1"
+        background: true
+        wait: 3
+    command: "ros2 topic info /chatter"
+    expect_contains:
+      - "Publisher count"
+      - "Subscription count"
+    cleanup:
+      - command: "pkill -f 'demo_nodes_cpp' 2>/dev/null || true"
+    timeout: 15
+    on_failure:
+      diagnose: "无法获取话题信息"
+      suggestions:
+        - "检查话题是否存在"
+        - "检查ros2cli功能"
+
+  - id: "topic_007"
+    name: "手动发布话题消息"
+    description: "验证可以手动发布话题消息"
+    priority: "P2"
+    setup:
+      - command: "ros2 run demo_nodes_cpp listener > /tmp/manual_listener.log 2>&1"
+        background: true
+        wait: 2
+    command: "ros2 topic pub /chatter std_msgs/msg/String 'data: test_message' --once 2>/dev/null; sleep 1; grep -q 'test_message' /tmp/manual_listener.log && echo 'PUB_OK' || echo 'PUB_FAILED'"
+    expect_contains:
+      - "PUB_OK"
+    cleanup:
+      - command: "pkill -f 'demo_nodes_cpp' 2>/dev/null || true"
+    timeout: 15
+    on_failure:
+      diagnose: "手动发布消息失败"
+      suggestions:
+        - "检查消息类型格式"
+        - "检查topic pub命令语法"

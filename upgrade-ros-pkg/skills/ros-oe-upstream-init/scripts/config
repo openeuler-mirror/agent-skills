@@ -1,0 +1,6 @@
+ROS_DISTRO=humble
+DEBUG=no
+
+# 仓库下载控制 (on/off, 默认 off)
+DOWNLOAD_EOL_REPO=on
+DOWNLOAD_UNKNOWN_REPO=on
